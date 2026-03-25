@@ -62,6 +62,7 @@ Thumbs.db
 # Local scratch files
 *.local
 *.tmp
+.worktrees/
 
 # MeTube runtime databases
 queue*
