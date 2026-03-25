@@ -1,4 +1,7 @@
+import json
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import patch
+from urllib.error import URLError
 
 from bot.errors import TelegramApiError
 from bot.telegram_api import TelegramApi
@@ -65,3 +68,21 @@ class TelegramApiTests(IsolatedAsyncioTestCase):
 
         with self.assertRaises(TelegramApiError):
             await api.send_message(chat_id=42, text="queued")
+
+    async def test_get_updates_wraps_transport_error(self):
+        api = TelegramApi(bot_token="token", timeout_seconds=7)
+
+        with patch.object(TelegramApi, "_default_get_json", side_effect=URLError("offline")):
+            with self.assertRaisesRegex(TelegramApiError, "offline"):
+                await api.get_updates(offset=55)
+
+    async def test_send_message_wraps_json_decode_error(self):
+        api = TelegramApi(bot_token="token", timeout_seconds=7)
+
+        with patch.object(
+            TelegramApi,
+            "_default_post_json",
+            side_effect=json.JSONDecodeError("bad json", "x", 0),
+        ):
+            with self.assertRaisesRegex(TelegramApiError, "bad json"):
+                await api.send_message(chat_id=42, text="queued")

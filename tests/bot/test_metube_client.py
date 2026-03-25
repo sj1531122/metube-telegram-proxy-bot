@@ -1,5 +1,9 @@
+import json
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import patch
+from urllib.error import URLError
 
+from bot.errors import MeTubeApiError
 from bot.metube_client import MeTubeClient
 
 
@@ -58,3 +62,21 @@ class MeTubeClientTests(IsolatedAsyncioTestCase):
                 "done": [{"url": "https://done.example"}],
             },
         )
+
+    async def test_add_download_wraps_transport_error(self):
+        client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
+
+        with patch.object(MeTubeClient, "_default_post_json", side_effect=URLError("metube down")):
+            with self.assertRaisesRegex(MeTubeApiError, "metube down"):
+                await client.add_download("https://video.example/watch")
+
+    async def test_fetch_history_wraps_json_decode_error(self):
+        client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
+
+        with patch.object(
+            MeTubeClient,
+            "_default_get_json",
+            side_effect=json.JSONDecodeError("bad json", "x", 0),
+        ):
+            with self.assertRaisesRegex(MeTubeApiError, "bad json"):
+                await client.fetch_history()

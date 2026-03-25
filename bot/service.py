@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from urllib.parse import quote
 
@@ -16,6 +17,7 @@ from bot.models import (
 from bot.url_utils import extract_urls
 
 AUDIO_FORMATS = {"mp3", "m4a", "opus", "wav", "flac"}
+logger = logging.getLogger(__name__)
 
 
 class BotService:
@@ -44,7 +46,7 @@ class BotService:
                 within_seconds=self.config.dedupe_window_seconds,
             )
             if duplicate is not None:
-                await self.telegram_api.send_message(chat_id, f"Already queued: {url}")
+                await self._send_message(chat_id, f"Already queued: {url}")
                 continue
 
             task_id = self.store.create_task(
@@ -58,27 +60,31 @@ class BotService:
                 reason = str(exc) or "submission failed"
                 self.store.update_task_state(task_id, STATE_FAILED, last_error=reason)
                 self.store.mark_notified(task_id)
-                await self.telegram_api.send_message(chat_id, f"Failed: {url}\nReason: {reason}")
+                logger.warning("download submission failed for url=%s: %s", url, reason)
+                await self._send_message(chat_id, f"Failed: {url}\nReason: {reason}")
                 continue
             if result.get("status") == "ok":
                 self.store.update_task_state(task_id, STATE_SUBMITTED)
-                await self.telegram_api.send_message(chat_id, f"Queued: {url}")
+                await self._send_message(chat_id, f"Queued: {url}")
             else:
                 reason = result.get("msg") or "submission failed"
                 self.store.update_task_state(task_id, STATE_FAILED, last_error=reason)
                 self.store.mark_notified(task_id)
-                await self.telegram_api.send_message(chat_id, f"Failed: {url}\nReason: {reason}")
+                logger.warning("download submission failed for url=%s: %s", url, reason)
+                await self._send_message(chat_id, f"Failed: {url}\nReason: {reason}")
 
     async def poll_once(self) -> None:
         try:
             history = await self.metube_client.fetch_history()
-        except MeTubeApiError:
+        except MeTubeApiError as exc:
+            logger.warning("MeTube history fetch failed: %s", exc)
             return
         for task in self.store.list_unfinished_tasks():
             if self._is_timed_out(task):
                 self.store.update_task_state(task.id, STATE_TIMEOUT, last_error="task timed out")
                 self.store.mark_notified(task.id)
-                await self.telegram_api.send_message(task.chat_id, f"Timeout: {task.source_url}")
+                logger.warning("task timed out for task_id=%s url=%s", task.id, task.source_url)
+                await self._send_message(task.chat_id, f"Timeout: {task.source_url}")
                 continue
 
             done_entry = self._find_entry(history.get("done", []), task.source_url)
@@ -109,7 +115,7 @@ class BotService:
                 reason = "completed_without_filename"
                 self.store.update_task_state(task.id, STATE_FAILED, title=title, last_error=reason)
                 self.store.mark_notified(task.id)
-                await self.telegram_api.send_message(task.chat_id, f"Failed: {title}\nReason: {reason}")
+                await self._send_message(task.chat_id, f"Failed: {title}\nReason: {reason}")
                 return
 
             download_url = self._build_download_url(entry, filename)
@@ -121,13 +127,15 @@ class BotService:
                 download_url=download_url,
             )
             self.store.mark_notified(task.id)
-            await self.telegram_api.send_message(task.chat_id, f"Finished: {title}\n{download_url}")
+            logger.info("task finished for task_id=%s title=%s", task.id, title)
+            await self._send_message(task.chat_id, f"Finished: {title}\n{download_url}")
             return
 
         reason = entry.get("msg") or entry.get("error") or "download failed"
         self.store.update_task_state(task.id, STATE_FAILED, title=title, last_error=reason)
         self.store.mark_notified(task.id)
-        await self.telegram_api.send_message(task.chat_id, f"Failed: {title}\nReason: {reason}")
+        logger.warning("task failed for task_id=%s title=%s: %s", task.id, title, reason)
+        await self._send_message(task.chat_id, f"Failed: {title}\nReason: {reason}")
 
     def _build_download_url(self, entry: dict, filename: str) -> str:
         encoded_filename = quote(filename, safe="/")
@@ -142,3 +150,10 @@ class BotService:
         if entry.get("quality") == "audio":
             return True
         return (entry.get("format") or "").lower() in AUDIO_FORMATS
+
+    async def _send_message(self, chat_id: int, text: str) -> dict:
+        try:
+            return await self.telegram_api.send_message(chat_id, text)
+        except TelegramApiError as exc:
+            logger.warning("telegram send failed for chat_id=%s: %s", chat_id, exc)
+            raise

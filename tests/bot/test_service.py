@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 
 from bot.config import BotConfig
-from bot.errors import MeTubeApiError
+from bot.errors import MeTubeApiError, TelegramApiError
 from bot.models import STATE_FAILED, STATE_FINISHED, STATE_SUBMITTED
 from bot.service import BotService
 from bot.store import TaskStore
@@ -32,8 +32,11 @@ class FakeMeTubeClient:
 class FakeTelegramApi:
     def __init__(self):
         self.messages = []
+        self.raise_exc = None
 
     async def send_message(self, chat_id: int, text: str):
+        if self.raise_exc is not None:
+            raise self.raise_exc
         self.messages.append((chat_id, text))
         return {"ok": True}
 
@@ -49,6 +52,7 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             public_host_url="https://download.example/files",
             public_host_audio_url="https://download.example/audio",
             sqlite_path=str(db_path),
+            http_timeout_seconds=30,
             poll_interval_seconds=15,
             task_timeout_seconds=21600,
             dedupe_window_seconds=300,
@@ -134,7 +138,8 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             telegram = FakeTelegramApi()
             service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
 
-            await service.poll_once()
+            with self.assertLogs("bot.service", "INFO") as logs:
+                await service.poll_once()
 
             task = store.get_task(task_id)
             self.assertEqual(task.state, STATE_FINISHED)
@@ -144,6 +149,7 @@ class BotServiceTests(IsolatedAsyncioTestCase):
                 telegram.messages,
                 [(42, "Finished: Movie\nhttps://download.example/files/movie.mp4")],
             )
+            self.assertTrue(any("task finished" in entry for entry in logs.output))
 
     async def test_poll_once_reports_failed_download(self):
         with TemporaryDirectory() as tmp:
@@ -173,7 +179,8 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             telegram = FakeTelegramApi()
             service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
 
-            await service.poll_once()
+            with self.assertLogs("bot.service", "WARNING") as logs:
+                await service.poll_once()
 
             task = store.get_task(task_id)
             self.assertEqual(task.state, STATE_FAILED)
@@ -182,6 +189,7 @@ class BotServiceTests(IsolatedAsyncioTestCase):
                 telegram.messages,
                 [(42, "Failed: Movie\nReason: download failed")],
             )
+            self.assertTrue(any("task failed" in entry for entry in logs.output))
 
     async def test_handle_update_reports_submission_exception(self):
         with TemporaryDirectory() as tmp:
@@ -193,16 +201,17 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             telegram = FakeTelegramApi()
             service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
 
-            await service.handle_update(
-                {
-                    "update_id": 1,
-                    "message": {
-                        "message_id": 99,
-                        "chat": {"id": 42},
-                        "text": "download https://video.example/watch",
-                    },
-                }
-            )
+            with self.assertLogs("bot.service", "WARNING") as logs:
+                await service.handle_update(
+                    {
+                        "update_id": 1,
+                        "message": {
+                            "message_id": 99,
+                            "chat": {"id": 42},
+                            "text": "download https://video.example/watch",
+                        },
+                    }
+                )
 
             task = store.find_recent_duplicate("https://video.example/watch", within_seconds=300)
             self.assertIsNotNone(task)
@@ -212,6 +221,32 @@ class BotServiceTests(IsolatedAsyncioTestCase):
                 telegram.messages,
                 [(42, "Failed: https://video.example/watch\nReason: metube unavailable")],
             )
+            self.assertTrue(any("download submission failed" in entry for entry in logs.output))
+
+    async def test_handle_update_logs_telegram_send_failure(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            store = TaskStore(db_path)
+            metube = FakeMeTubeClient()
+            telegram = FakeTelegramApi()
+            telegram.raise_exc = TelegramApiError("chat blocked")
+            service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
+
+            with self.assertLogs("bot.service", "WARNING") as logs:
+                with self.assertRaisesRegex(TelegramApiError, "chat blocked"):
+                    await service.handle_update(
+                        {
+                            "update_id": 1,
+                            "message": {
+                                "message_id": 99,
+                                "chat": {"id": 42},
+                                "text": "download https://video.example/watch",
+                            },
+                        }
+                    )
+
+            self.assertTrue(any("telegram send failed" in entry for entry in logs.output))
 
     async def test_poll_once_ignores_history_fetch_exception(self):
         with TemporaryDirectory() as tmp:
@@ -273,3 +308,34 @@ class BotServiceTests(IsolatedAsyncioTestCase):
                 telegram.messages,
                 [(42, "Finished: Track\nhttps://download.example/audio/track.mp3")],
             )
+
+    async def test_poll_once_logs_task_timeout(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            config.task_timeout_seconds = 1
+            store = TaskStore(db_path)
+            task_id = store.create_task(
+                chat_id=42,
+                telegram_message_id=99,
+                source_url="https://video.example/watch",
+            )
+            task = store.get_task(task_id)
+            store.update_task_state(task_id, STATE_SUBMITTED)
+            metube = FakeMeTubeClient()
+            telegram = FakeTelegramApi()
+            service = BotService(
+                config=config,
+                store=store,
+                metube_client=metube,
+                telegram_api=telegram,
+                time_fn=lambda: task.submitted_at + 5,
+            )
+
+            with self.assertLogs("bot.service", "WARNING") as logs:
+                await service.poll_once()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.last_error, "task timed out")
+            self.assertEqual(telegram.messages, [(42, "Timeout: https://video.example/watch")])
+            self.assertTrue(any("task timed out" in entry for entry in logs.output))
