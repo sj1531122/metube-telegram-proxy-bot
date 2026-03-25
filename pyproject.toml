@@ -12,6 +12,9 @@ dependencies = [
     "watchfiles",
 ]
 
+[project.scripts]
+metube-telegram-bot = "bot.main:main"
+
 [dependency-groups]
 dev = [
     "pylint",
