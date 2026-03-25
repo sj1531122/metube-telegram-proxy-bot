@@ -63,12 +63,47 @@ class MeTubeClientTests(IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_clear_done_entries_posts_expected_payload(self):
+        calls = []
+
+        def fake_post(url, payload, headers):
+            calls.append((url, payload, headers))
+            return {"status": "ok"}
+
+        client = MeTubeClient(
+            base_url="https://metube.example",
+            auth_header_name="Authorization",
+            auth_header_value="Bearer token",
+            post_json=fake_post,
+        )
+
+        result = await client.clear_done_entries(["done-1", "done-2"])
+
+        self.assertEqual(result, {"status": "ok"})
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "https://metube.example/delete",
+                    {"where": "done", "ids": ["done-1", "done-2"]},
+                    {"Authorization": "Bearer token"},
+                )
+            ],
+        )
+
     async def test_add_download_wraps_transport_error(self):
         client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
 
         with patch.object(MeTubeClient, "_default_post_json", side_effect=URLError("metube down")):
             with self.assertRaisesRegex(MeTubeApiError, "metube down"):
                 await client.add_download("https://video.example/watch")
+
+    async def test_clear_done_entries_wraps_transport_error(self):
+        client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
+
+        with patch.object(MeTubeClient, "_default_post_json", side_effect=URLError("delete down")):
+            with self.assertRaisesRegex(MeTubeApiError, "delete down"):
+                await client.clear_done_entries(["done-1"])
 
     async def test_fetch_history_wraps_json_decode_error(self):
         client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
@@ -80,3 +115,14 @@ class MeTubeClientTests(IsolatedAsyncioTestCase):
         ):
             with self.assertRaisesRegex(MeTubeApiError, "bad json"):
                 await client.fetch_history()
+
+    async def test_clear_done_entries_wraps_json_decode_error(self):
+        client = MeTubeClient(base_url="https://metube.example", timeout_seconds=7)
+
+        with patch.object(
+            MeTubeClient,
+            "_default_post_json",
+            side_effect=json.JSONDecodeError("bad json", "x", 0),
+        ):
+            with self.assertRaisesRegex(MeTubeApiError, "bad json"):
+                await client.clear_done_entries(["done-1"])

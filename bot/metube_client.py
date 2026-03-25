@@ -58,6 +58,29 @@ class MeTubeClient:
             raise MeTubeApiError("invalid add response from MeTube")
         return response
 
+    async def clear_done_entries(self, ids: list[str]) -> dict:
+        payload = {"where": "done", "ids": ids}
+        headers = self._build_headers()
+        endpoint = f"{self.base_url}/delete"
+        try:
+            if self._post_json is not None:
+                response = self._post_json(endpoint, payload, headers)
+            else:
+                response = await asyncio.to_thread(
+                    self._default_post_json,
+                    endpoint,
+                    payload,
+                    headers,
+                    self.timeout_seconds,
+                )
+        except MeTubeApiError:
+            raise
+        except (error.HTTPError, error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise MeTubeApiError(f"MeTube delete request failed: {exc}") from exc
+        if not isinstance(response, dict):
+            raise MeTubeApiError("invalid delete response from MeTube")
+        return response
+
     async def fetch_history(self) -> dict:
         headers = self._build_headers()
         endpoint = f"{self.base_url}/history"
