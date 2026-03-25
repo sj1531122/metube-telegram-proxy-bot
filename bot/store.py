@@ -22,6 +22,7 @@ UNFINISHED_STATES = (
     STATE_QUEUED,
     STATE_RETRYING,
 )
+_UNSET = object()
 
 
 class TaskStore:
@@ -72,7 +73,11 @@ class TaskStore:
             }
             for column_name, ddl in migrations.items():
                 if column_name not in existing_columns:
-                    connection.execute(ddl)
+                    try:
+                        connection.execute(ddl)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
 
     def create_task(self, chat_id: int, telegram_message_id: int, source_url: str) -> int:
         submitted_at = time.time()
@@ -130,45 +135,38 @@ class TaskStore:
         task_id: int,
         state: str,
         *,
-        download_url: str | None = None,
-        filename: str | None = None,
-        title: str | None = None,
-        last_error: str | None = None,
-        retry_count: int | None = None,
-        max_retries: int | None = None,
-        next_retry_at: float | None = None,
-        retry_notice_sent_at: float | None = None,
-        last_attempt_submitted_at: float | None = None,
+        download_url: str | None | object = _UNSET,
+        filename: str | None | object = _UNSET,
+        title: str | None | object = _UNSET,
+        last_error: str | None | object = _UNSET,
+        retry_count: int | object = _UNSET,
+        max_retries: int | None | object = _UNSET,
+        next_retry_at: float | None | object = _UNSET,
+        retry_notice_sent_at: float | None | object = _UNSET,
+        last_attempt_submitted_at: float | None | object = _UNSET,
     ) -> None:
+        assignments = ["state = ?"]
+        values: list[object] = [state]
+        field_values = (
+            ("download_url", download_url),
+            ("filename", filename),
+            ("title", title),
+            ("last_error", last_error),
+            ("retry_count", retry_count),
+            ("max_retries", max_retries),
+            ("next_retry_at", next_retry_at),
+            ("retry_notice_sent_at", retry_notice_sent_at),
+            ("last_attempt_submitted_at", last_attempt_submitted_at),
+        )
+        for column_name, value in field_values:
+            if value is not _UNSET:
+                assignments.append(f"{column_name} = ?")
+                values.append(value)
+        values.append(task_id)
         with self._connect() as connection:
             connection.execute(
-                """
-                UPDATE tasks
-                SET state = ?,
-                    download_url = COALESCE(?, download_url),
-                    filename = COALESCE(?, filename),
-                    title = COALESCE(?, title),
-                    last_error = COALESCE(?, last_error),
-                    retry_count = COALESCE(?, retry_count),
-                    max_retries = COALESCE(?, max_retries),
-                    next_retry_at = COALESCE(?, next_retry_at),
-                    retry_notice_sent_at = COALESCE(?, retry_notice_sent_at),
-                    last_attempt_submitted_at = COALESCE(?, last_attempt_submitted_at)
-                WHERE id = ?
-                """,
-                (
-                    state,
-                    download_url,
-                    filename,
-                    title,
-                    last_error,
-                    retry_count,
-                    max_retries,
-                    next_retry_at,
-                    retry_notice_sent_at,
-                    last_attempt_submitted_at,
-                    task_id,
-                ),
+                f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
+                values,
             )
 
     def mark_notified(self, task_id: int, notified_at: float | None = None) -> None:
