@@ -11,6 +11,7 @@ from bot.models import (
     STATE_FINISHED,
     STATE_QUEUED,
     STATE_RECEIVED,
+    STATE_RETRYING,
     STATE_SUBMITTED,
     STATE_TIMEOUT,
 )
@@ -19,6 +20,7 @@ UNFINISHED_STATES = (
     STATE_RECEIVED,
     STATE_SUBMITTED,
     STATE_QUEUED,
+    STATE_RETRYING,
 )
 
 
@@ -48,10 +50,29 @@ class TaskStore:
                     filename TEXT,
                     title TEXT,
                     last_error TEXT,
-                    notified_at REAL
+                    notified_at REAL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER,
+                    next_retry_at REAL,
+                    retry_notice_sent_at REAL,
+                    last_attempt_submitted_at REAL
                 )
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+            }
+            migrations = {
+                "retry_count": "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+                "max_retries": "ALTER TABLE tasks ADD COLUMN max_retries INTEGER",
+                "next_retry_at": "ALTER TABLE tasks ADD COLUMN next_retry_at REAL",
+                "retry_notice_sent_at": "ALTER TABLE tasks ADD COLUMN retry_notice_sent_at REAL",
+                "last_attempt_submitted_at": "ALTER TABLE tasks ADD COLUMN last_attempt_submitted_at REAL",
+            }
+            for column_name, ddl in migrations.items():
+                if column_name not in existing_columns:
+                    connection.execute(ddl)
 
     def create_task(self, chat_id: int, telegram_message_id: int, source_url: str) -> int:
         submitted_at = time.time()
@@ -113,6 +134,11 @@ class TaskStore:
         filename: str | None = None,
         title: str | None = None,
         last_error: str | None = None,
+        retry_count: int | None = None,
+        max_retries: int | None = None,
+        next_retry_at: float | None = None,
+        retry_notice_sent_at: float | None = None,
+        last_attempt_submitted_at: float | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -122,10 +148,27 @@ class TaskStore:
                     download_url = COALESCE(?, download_url),
                     filename = COALESCE(?, filename),
                     title = COALESCE(?, title),
-                    last_error = COALESCE(?, last_error)
+                    last_error = COALESCE(?, last_error),
+                    retry_count = COALESCE(?, retry_count),
+                    max_retries = COALESCE(?, max_retries),
+                    next_retry_at = COALESCE(?, next_retry_at),
+                    retry_notice_sent_at = COALESCE(?, retry_notice_sent_at),
+                    last_attempt_submitted_at = COALESCE(?, last_attempt_submitted_at)
                 WHERE id = ?
                 """,
-                (state, download_url, filename, title, last_error, task_id),
+                (
+                    state,
+                    download_url,
+                    filename,
+                    title,
+                    last_error,
+                    retry_count,
+                    max_retries,
+                    next_retry_at,
+                    retry_notice_sent_at,
+                    last_attempt_submitted_at,
+                    task_id,
+                ),
             )
 
     def mark_notified(self, task_id: int, notified_at: float | None = None) -> None:
@@ -151,4 +194,9 @@ class TaskStore:
             title=row["title"],
             last_error=row["last_error"],
             notified_at=row["notified_at"],
+            retry_count=row["retry_count"],
+            max_retries=row["max_retries"],
+            next_retry_at=row["next_retry_at"],
+            retry_notice_sent_at=row["retry_notice_sent_at"],
+            last_attempt_submitted_at=row["last_attempt_submitted_at"],
         )
