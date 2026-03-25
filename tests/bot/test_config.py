@@ -8,6 +8,17 @@ class LoadConfigTests(TestCase):
         with self.assertRaises(ValueError):
             load_config({})
 
+    def test_load_config_requires_complete_auth_header_pair(self):
+        with self.assertRaises(ValueError):
+            load_config(
+                {
+                    "TELEGRAM_BOT_TOKEN": "token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                    "METUBE_BASE_URL": "https://metube.example/",
+                    "METUBE_AUTH_HEADER_NAME": "Authorization",
+                }
+            )
+
     def test_load_config_parses_required_settings(self):
         config = load_config(
             {
@@ -33,3 +44,30 @@ class LoadConfigTests(TestCase):
                 dedupe_window_seconds=300,
             ),
         )
+
+    def test_load_config_normalizes_public_urls_and_positive_intervals(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                "METUBE_BASE_URL": "https://metube.example/",
+                "PUBLIC_HOST_URL": "https://download.example/files/",
+                "PUBLIC_HOST_AUDIO_URL": "https://download.example/audio/",
+                "BOT_POLL_INTERVAL_SECONDS": "10",
+                "BOT_TASK_TIMEOUT_SECONDS": "20",
+                "BOT_DEDUPE_WINDOW_SECONDS": "30",
+            }
+        )
+
+        self.assertEqual(config.public_host_url, "https://download.example/files")
+        self.assertEqual(config.public_host_audio_url, "https://download.example/audio")
+
+        with self.assertRaises(ValueError):
+            load_config(
+                {
+                    "TELEGRAM_BOT_TOKEN": "token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                    "METUBE_BASE_URL": "https://metube.example/",
+                    "BOT_POLL_INTERVAL_SECONDS": "0",
+                }
+            )

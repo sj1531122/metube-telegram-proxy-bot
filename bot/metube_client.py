@@ -5,6 +5,8 @@ import json
 from typing import Callable
 from urllib import request
 
+from bot.errors import MeTubeApiError
+
 
 class MeTubeClient:
     def __init__(
@@ -36,8 +38,12 @@ class MeTubeClient:
         headers = self._build_headers()
         endpoint = f"{self.base_url}/add"
         if self._post_json is not None:
-            return self._post_json(endpoint, payload, headers)
-        return await asyncio.to_thread(self._default_post_json, endpoint, payload, headers)
+            response = self._post_json(endpoint, payload, headers)
+        else:
+            response = await asyncio.to_thread(self._default_post_json, endpoint, payload, headers)
+        if not isinstance(response, dict):
+            raise MeTubeApiError("invalid add response from MeTube")
+        return response
 
     async def fetch_history(self) -> dict:
         headers = self._build_headers()
@@ -46,6 +52,8 @@ class MeTubeClient:
             data = self._get_json(endpoint, headers)
         else:
             data = await asyncio.to_thread(self._default_get_json, endpoint, headers)
+        if not isinstance(data, dict):
+            raise MeTubeApiError("invalid history response from MeTube")
 
         return {
             "queue": data.get("queue", []),

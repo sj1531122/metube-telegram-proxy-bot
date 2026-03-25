@@ -1,5 +1,6 @@
 from unittest import IsolatedAsyncioTestCase
 
+from bot.errors import TelegramApiError
 from bot.telegram_api import TelegramApi
 
 
@@ -46,3 +47,21 @@ class TelegramApiTests(IsolatedAsyncioTestCase):
                 )
             ],
         )
+
+    async def test_get_updates_raises_when_api_reports_error(self):
+        def fake_get(url, params):
+            return {"ok": False, "description": "bad token"}
+
+        api = TelegramApi(bot_token="token", get_json=fake_get)
+
+        with self.assertRaises(TelegramApiError):
+            await api.get_updates(offset=55)
+
+    async def test_send_message_raises_when_api_reports_error(self):
+        def fake_post(url, payload):
+            return {"ok": False, "description": "chat not found"}
+
+        api = TelegramApi(bot_token="token", post_json=fake_post)
+
+        with self.assertRaises(TelegramApiError):
+            await api.send_message(chat_id=42, text="queued")

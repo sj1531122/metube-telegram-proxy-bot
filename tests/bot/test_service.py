@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 
 from bot.config import BotConfig
+from bot.errors import MeTubeApiError
 from bot.models import STATE_FAILED, STATE_FINISHED, STATE_SUBMITTED
 from bot.service import BotService
 from bot.store import TaskStore
@@ -13,12 +14,18 @@ class FakeMeTubeClient:
         self.history = history or {"queue": [], "pending": [], "done": []}
         self.add_result = add_result or {"status": "ok"}
         self.added_urls = []
+        self.raise_on_add = None
+        self.raise_on_fetch = None
 
     async def add_download(self, url: str):
+        if self.raise_on_add is not None:
+            raise self.raise_on_add
         self.added_urls.append(url)
         return self.add_result
 
     async def fetch_history(self):
+        if self.raise_on_fetch is not None:
+            raise self.raise_on_fetch
         return self.history
 
 
@@ -174,4 +181,95 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(
                 telegram.messages,
                 [(42, "Failed: Movie\nReason: download failed")],
+            )
+
+    async def test_handle_update_reports_submission_exception(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            store = TaskStore(db_path)
+            metube = FakeMeTubeClient()
+            metube.raise_on_add = MeTubeApiError("metube unavailable")
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 99,
+                        "chat": {"id": 42},
+                        "text": "download https://video.example/watch",
+                    },
+                }
+            )
+
+            task = store.find_recent_duplicate("https://video.example/watch", within_seconds=300)
+            self.assertIsNotNone(task)
+            self.assertEqual(task.state, STATE_FAILED)
+            self.assertEqual(task.last_error, "metube unavailable")
+            self.assertEqual(
+                telegram.messages,
+                [(42, "Failed: https://video.example/watch\nReason: metube unavailable")],
+            )
+
+    async def test_poll_once_ignores_history_fetch_exception(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            store = TaskStore(db_path)
+            task_id = store.create_task(
+                chat_id=42,
+                telegram_message_id=99,
+                source_url="https://video.example/watch",
+            )
+            store.update_task_state(task_id, STATE_SUBMITTED)
+            metube = FakeMeTubeClient()
+            metube.raise_on_fetch = MeTubeApiError("history unavailable")
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
+
+            await service.poll_once()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_SUBMITTED)
+            self.assertEqual(telegram.messages, [])
+
+    async def test_poll_once_uses_audio_public_host_for_audio_downloads(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            store = TaskStore(db_path)
+            task_id = store.create_task(
+                chat_id=42,
+                telegram_message_id=99,
+                source_url="https://video.example/watch",
+            )
+            store.update_task_state(task_id, STATE_SUBMITTED)
+            metube = FakeMeTubeClient(
+                history={
+                    "queue": [],
+                    "pending": [],
+                    "done": [
+                        {
+                            "url": "https://video.example/watch",
+                            "status": "finished",
+                            "filename": "track.mp3",
+                            "title": "Track",
+                            "quality": "audio",
+                            "format": "mp3",
+                        }
+                    ],
+                }
+            )
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
+
+            await service.poll_once()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.download_url, "https://download.example/audio/track.mp3")
+            self.assertEqual(
+                telegram.messages,
+                [(42, "Finished: Track\nhttps://download.example/audio/track.mp3")],
             )

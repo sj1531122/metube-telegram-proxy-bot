@@ -5,6 +5,8 @@ import json
 from typing import Callable
 from urllib import parse, request
 
+from bot.errors import TelegramApiError
+
 
 class TelegramApi:
     def __init__(
@@ -27,14 +29,23 @@ class TelegramApi:
             response = self._get_json(endpoint, params)
         else:
             response = await asyncio.to_thread(self._default_get_json, endpoint, params)
+        self._ensure_ok(response)
         return response.get("result", [])
 
     async def send_message(self, chat_id: int, text: str) -> dict:
         endpoint = f"{self.base_url}/sendMessage"
         payload = {"chat_id": chat_id, "text": text}
         if self._post_json is not None:
-            return self._post_json(endpoint, payload)
-        return await asyncio.to_thread(self._default_post_json, endpoint, payload)
+            response = self._post_json(endpoint, payload)
+        else:
+            response = await asyncio.to_thread(self._default_post_json, endpoint, payload)
+        self._ensure_ok(response)
+        return response
+
+    @staticmethod
+    def _ensure_ok(response: dict) -> None:
+        if not response.get("ok", True):
+            raise TelegramApiError(response.get("description") or "telegram api request failed")
 
     @staticmethod
     def _default_get_json(url: str, params: dict) -> dict:

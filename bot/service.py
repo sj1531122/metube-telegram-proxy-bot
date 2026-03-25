@@ -4,6 +4,7 @@ import time
 from urllib.parse import quote
 
 from bot.config import BotConfig
+from bot.errors import MeTubeApiError, TelegramApiError
 from bot.models import (
     STATE_FAILED,
     STATE_FINISHED,
@@ -51,7 +52,14 @@ class BotService:
                 telegram_message_id=message_id,
                 source_url=url,
             )
-            result = await self.metube_client.add_download(url)
+            try:
+                result = await self.metube_client.add_download(url)
+            except MeTubeApiError as exc:
+                reason = str(exc) or "submission failed"
+                self.store.update_task_state(task_id, STATE_FAILED, last_error=reason)
+                self.store.mark_notified(task_id)
+                await self.telegram_api.send_message(chat_id, f"Failed: {url}\nReason: {reason}")
+                continue
             if result.get("status") == "ok":
                 self.store.update_task_state(task_id, STATE_SUBMITTED)
                 await self.telegram_api.send_message(chat_id, f"Queued: {url}")
@@ -62,7 +70,10 @@ class BotService:
                 await self.telegram_api.send_message(chat_id, f"Failed: {url}\nReason: {reason}")
 
     async def poll_once(self) -> None:
-        history = await self.metube_client.fetch_history()
+        try:
+            history = await self.metube_client.fetch_history()
+        except MeTubeApiError:
+            return
         for task in self.store.list_unfinished_tasks():
             if self._is_timed_out(task):
                 self.store.update_task_state(task.id, STATE_TIMEOUT, last_error="task timed out")

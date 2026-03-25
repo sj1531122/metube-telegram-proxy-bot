@@ -4,10 +4,36 @@ import asyncio
 import os
 
 from bot.config import load_config
+from bot.errors import BotIntegrationError
 from bot.metube_client import MeTubeClient
 from bot.service import BotService
 from bot.store import TaskStore
 from bot.telegram_api import TelegramApi
+
+
+async def run_iteration(*, service: BotService, telegram_api: TelegramApi, offset: int | None) -> int | None:
+    try:
+        updates = await telegram_api.get_updates(offset=offset)
+    except BotIntegrationError:
+        updates = []
+
+    next_offset = offset
+    for update in updates:
+        try:
+            await service.handle_update(update)
+        except BotIntegrationError:
+            pass
+
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            next_offset = update_id + 1
+
+    try:
+        await service.poll_once()
+    except BotIntegrationError:
+        pass
+
+    return next_offset
 
 
 async def run_bot() -> None:
@@ -28,14 +54,7 @@ async def run_bot() -> None:
 
     offset: int | None = None
     while True:
-        updates = await telegram_api.get_updates(offset=offset)
-        for update in updates:
-            await service.handle_update(update)
-            update_id = update.get("update_id")
-            if isinstance(update_id, int):
-                offset = update_id + 1
-
-        await service.poll_once()
+        offset = await run_iteration(service=service, telegram_api=telegram_api, offset=offset)
         await asyncio.sleep(config.poll_interval_seconds)
 
 
