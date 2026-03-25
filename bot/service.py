@@ -15,7 +15,7 @@ from bot.models import (
     STATE_TIMEOUT,
     BotTask,
 )
-from bot.url_utils import extract_urls
+from bot.url_utils import extract_urls, normalize_source_url
 
 AUDIO_FORMATS = {"mp3", "m4a", "opus", "wav", "flac"}
 RETRY_DELAYS_SECONDS = (30, 60, 120, 300, 600)
@@ -44,27 +44,28 @@ class BotService:
 
         message_id = message.get("message_id", 0)
         for url in urls:
+            source_url = normalize_source_url(url)
             duplicate = self.store.find_recent_duplicate(
-                source_url=url,
+                source_url=source_url,
                 within_seconds=self.config.dedupe_window_seconds,
             )
             if duplicate is not None:
-                await self._send_message(chat_id, f"Already queued: {url}")
+                await self._send_message(chat_id, f"Already queued: {source_url}")
                 continue
 
             task_id = self.store.create_task(
                 chat_id=chat_id,
                 telegram_message_id=message_id,
-                source_url=url,
+                source_url=source_url,
             )
             try:
-                result = await self.metube_client.add_download(url)
+                result = await self.metube_client.add_download(source_url)
             except MeTubeApiError as exc:
                 reason = str(exc) or "submission failed"
                 self.store.update_task_state(task_id, STATE_FAILED, last_error=reason)
                 self.store.mark_notified(task_id)
-                logger.warning("download submission failed for url=%s: %s", url, reason)
-                await self._send_message(chat_id, f"Failed: {url}\nReason: {reason}")
+                logger.warning("download submission failed for url=%s: %s", source_url, reason)
+                await self._send_message(chat_id, f"Failed: {source_url}\nReason: {reason}")
                 continue
             if result.get("status") == "ok":
                 self.store.update_task_state(
@@ -73,13 +74,13 @@ class BotService:
                     max_retries=DEFAULT_MAX_RETRIES,
                     last_attempt_submitted_at=self.time_fn(),
                 )
-                await self._send_message(chat_id, f"Queued: {url}")
+                await self._send_message(chat_id, f"Queued: {source_url}")
             else:
                 reason = result.get("msg") or "submission failed"
                 self.store.update_task_state(task_id, STATE_FAILED, last_error=reason)
                 self.store.mark_notified(task_id)
-                logger.warning("download submission failed for url=%s: %s", url, reason)
-                await self._send_message(chat_id, f"Failed: {url}\nReason: {reason}")
+                logger.warning("download submission failed for url=%s: %s", source_url, reason)
+                await self._send_message(chat_id, f"Failed: {source_url}\nReason: {reason}")
 
     async def poll_once(self) -> None:
         try:
@@ -129,8 +130,10 @@ class BotService:
 
     @staticmethod
     def _find_entry(entries: list[dict], source_url: str) -> dict | None:
+        normalized_source_url = normalize_source_url(source_url)
         for entry in entries:
-            if entry.get("url") == source_url:
+            entry_url = entry.get("url")
+            if isinstance(entry_url, str) and normalize_source_url(entry_url) == normalized_source_url:
                 return entry
         return None
 
@@ -172,7 +175,7 @@ class BotService:
             last_attempt_submitted_at=submitted_at,
         )
         try:
-            await self.metube_client.clear_done_entries([task.source_url])
+            await self.metube_client.clear_done_entries([normalize_source_url(task.source_url)])
         except MeTubeApiError as exc:
             logger.warning(
                 "failed to clear stale done entry for task_id=%s url=%s: %s",

@@ -120,6 +120,54 @@ class BotServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(tasks[0].state, STATE_SUBMITTED)
             self.assertEqual(telegram.messages, [(42, "Queued: https://video.example/watch")])
 
+    async def test_handle_update_normalizes_youtube_short_url_for_submission_and_history_matching(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path)
+            store = TaskStore(db_path)
+            metube = FakeMeTubeClient(
+                history={
+                    "queue": [],
+                    "pending": [],
+                    "done": [
+                        {
+                            "url": "https://www.youtube.com/watch?v=lNjhCIvNaI4",
+                            "status": "finished",
+                            "filename": "movie.mp4",
+                            "title": "Movie",
+                            "quality": "best",
+                            "format": "mp4",
+                        }
+                    ],
+                }
+            )
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, metube_client=metube, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 99,
+                        "chat": {"id": 42},
+                        "text": "download https://youtu.be/lNjhCIvNaI4?si=5ZD1RXPJXZ0j7l8b",
+                    },
+                }
+            )
+            await service.poll_once()
+
+            task = store.get_task(1)
+            self.assertEqual(metube.added_urls, ["https://www.youtube.com/watch?v=lNjhCIvNaI4"])
+            self.assertEqual(task.source_url, "https://www.youtube.com/watch?v=lNjhCIvNaI4")
+            self.assertEqual(task.state, STATE_FINISHED)
+            self.assertEqual(
+                telegram.messages,
+                [
+                    (42, "Queued: https://www.youtube.com/watch?v=lNjhCIvNaI4"),
+                    (42, "Finished: Movie\nhttps://download.example/files/movie.mp4"),
+                ],
+            )
+
     async def test_handle_update_ignores_unauthorized_chat(self):
         with TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.sqlite3"
