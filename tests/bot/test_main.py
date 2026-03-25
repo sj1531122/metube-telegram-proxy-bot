@@ -1,4 +1,7 @@
+import runpy
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import patch
 
 from bot.errors import TelegramApiError
 from bot.main import main, run_iteration
@@ -7,6 +10,19 @@ from bot.main import main, run_iteration
 class MainModuleTests(TestCase):
     def test_main_is_callable(self):
         self.assertTrue(callable(main))
+
+    def test_running_module_as_script_invokes_main(self):
+        calls = []
+
+        def fake_run(coro):
+            calls.append(coro)
+            coro.close()
+
+        with patch("asyncio.run", fake_run):
+            module_path = Path(__file__).resolve().parents[2] / "bot" / "main.py"
+            runpy.run_path(str(module_path), run_name="__main__")
+
+        self.assertEqual(len(calls), 1)
 
 
 class FakeTelegramApi:
