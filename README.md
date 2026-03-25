@@ -138,6 +138,49 @@ python3 -m bot.main
 - 运行前需要你自己先把 `.env` 中的值填好
 - 如果你直接运行，会严格读取环境变量，不会自动解析 `.env` 文件
 
+### systemd 部署说明
+
+如果你已经按最小链路验证成功，可以直接用仓库内的 `systemd` 模板转为后台常驻运行。
+
+模板文件：
+
+- `deploy/systemd/metube-telegram-bot.service`
+
+假设你的部署目录是 `/opt/metube-telegram-proxy-bot`，并且 `.env` 已经放在这个目录下。
+
+1. 复制 service 文件到系统目录。
+
+```bash
+sudo cp deploy/systemd/metube-telegram-bot.service /etc/systemd/system/metube-telegram-bot.service
+```
+
+2. 重载 `systemd` 配置并启动服务。
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now metube-telegram-bot
+```
+
+3. 查看服务状态。
+
+```bash
+sudo systemctl status metube-telegram-bot
+```
+
+4. 实时查看日志。
+
+```bash
+sudo journalctl -u metube-telegram-bot -f
+```
+
+说明：
+
+- 当前模板按源码方式运行，不需要先执行 `pip install .`
+- 当前模板默认以 `root` 身份运行
+- `WorkingDirectory` 固定为 `/opt/metube-telegram-proxy-bot`
+- `EnvironmentFile` 固定为 `/opt/metube-telegram-proxy-bot/.env`
+- `ExecStart` 固定为 `/usr/bin/python3 -m bot.main`
+
 ### 致谢 / Upstream
 
 本项目当前基于 MeTube 代码演进而来。
@@ -281,6 +324,52 @@ Current limitations:
 - it is currently scoped for a single user and a single chat
 - you must fill in `.env` yourself before running
 - the code reads environment variables directly and does not auto-load `.env`
+
+### systemd Deployment
+
+If the minimal end-to-end flow already works, you can switch the bot to a background `systemd` service using the template in this repository.
+
+Template file:
+
+- `deploy/systemd/metube-telegram-bot.service`
+
+Assumptions:
+
+- the repository is deployed at `/opt/metube-telegram-proxy-bot`
+- your `.env` file already exists at `/opt/metube-telegram-proxy-bot/.env`
+
+1. Copy the service file into the systemd directory.
+
+```bash
+sudo cp deploy/systemd/metube-telegram-bot.service /etc/systemd/system/metube-telegram-bot.service
+```
+
+2. Reload `systemd` and start the service.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now metube-telegram-bot
+```
+
+3. Check service status.
+
+```bash
+sudo systemctl status metube-telegram-bot
+```
+
+4. Follow logs in real time.
+
+```bash
+sudo journalctl -u metube-telegram-bot -f
+```
+
+Notes:
+
+- the current template runs directly from source, so `pip install .` is not required
+- the current template runs as `root`
+- `WorkingDirectory` is fixed to `/opt/metube-telegram-proxy-bot`
+- `EnvironmentFile` is fixed to `/opt/metube-telegram-proxy-bot/.env`
+- `ExecStart` is fixed to `/usr/bin/python3 -m bot.main`
 
 ### Credits / Upstream
 
