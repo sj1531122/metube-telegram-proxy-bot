@@ -22,7 +22,8 @@ Standalone Telegram download bot project powered by MeTube as the download backe
 当前仓库还处于开发中，定位已经确定，但功能尚未全部落地：
 
 - 当前代码主体仍然是 MeTube 基底代码
-- Telegram Bot 逻辑还未正式实现
+- Telegram Bot 已有 MVP 代码骨架，位于 `bot/`
+- 任务提交、状态持久化、MeTube 轮询和 Telegram 回执的核心单元测试已就位
 - README 现在描述的是仓库目标方向，而不是“已经全部完成的功能”
 
 ### 项目介绍
@@ -147,7 +148,8 @@ At this stage, the repository contains:
 
 - the MeTube codebase
 - the Telegram bot design document
-- the foundation for the bot implementation that will be added next
+- an initial bot MVP skeleton under `bot/`
+- unit tests for config loading, URL parsing, persistence, MeTube API calls, Telegram API calls, and service orchestration
 
 Design document:
 
