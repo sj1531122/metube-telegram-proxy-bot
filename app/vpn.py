@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import base64
+import hashlib
 import urllib.request
 import urllib.parse
 import logging
@@ -36,8 +37,7 @@ def decode_base64(data):
     try:
         return base64.b64decode(data).decode('utf-8')
     except Exception as e:
-        logger.error(f"Failed to decode base64 data: {e}")
-        sys.exit(1)
+        raise ValueError(f"Failed to decode base64 data: {e}") from e
 
 def parse_vless(uri):
     # vless://uuid@host:port?params#name
@@ -50,6 +50,9 @@ def parse_vless(uri):
         host = parsed.hostname
         port = parsed.port
         params = urllib.parse.parse_qs(parsed.query)
+
+        if not uuid or not host or port is None:
+            return None
 
         # Extract params
         security = params.get('security', ['none'])[0]
@@ -138,6 +141,9 @@ def parse_vmess(uri):
         json_str = decode_base64(b64_data)
         data = json.loads(json_str)
 
+        if not data.get('add') or not data.get('port') or not data.get('id'):
+            return None
+
         # Mapping from vmess share link standard to Xray config
         outbound = {
             "protocol": "vmess",
@@ -188,7 +194,36 @@ def parse_vmess(uri):
         logger.error(f"Error parsing vmess URI: {e}")
         return None
 
-def generate_config(node_config):
+def parse_subscription_nodes(raw_data):
+    try:
+        decoded_data = decode_base64(raw_data)
+    except Exception:
+        decoded_data = raw_data
+
+    nodes = []
+    for line in decoded_data.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        node_config = None
+        if line.startswith('vless://'):
+            node_config = parse_vless(line)
+        elif line.startswith('vmess://'):
+            node_config = parse_vmess(line)
+
+        if node_config is not None:
+            nodes.append(node_config)
+
+    return nodes
+
+
+def node_fingerprint(node_config):
+    canonical = json.dumps(node_config, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def render_xray_config(node_config):
     return {
         "log": {
             "loglevel": "warning"
@@ -233,6 +268,10 @@ def generate_config(node_config):
         }
     }
 
+
+def generate_config(node_config):
+    return render_xray_config(node_config)
+
 def main():
     url = os.environ.get('VPN_SUBSCRIPTION_URL')
     if not url:
@@ -240,35 +279,15 @@ def main():
         sys.exit(0)
 
     raw_data = fetch_subscription(url)
-    try:
-        decoded_data = decode_base64(raw_data)
-    except:
-        # Maybe it's not base64, just plain list of links?
-        decoded_data = raw_data
-
-    lines = decoded_data.splitlines()
-
-    first_node_config = None
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith('vless://'):
-            first_node_config = parse_vless(line)
-        elif line.startswith('vmess://'):
-            first_node_config = parse_vmess(line)
-
-        if first_node_config:
-            logger.info(f"Found valid node: {first_node_config['protocol']}")
-            break
+    nodes = parse_subscription_nodes(raw_data)
+    first_node_config = nodes[0] if nodes else None
 
     if not first_node_config:
         logger.error("No valid VMess or VLESS node found in subscription.")
         sys.exit(1)
 
-    xray_config = generate_config(first_node_config)
+    logger.info(f"Found valid node: {first_node_config['protocol']}")
+    xray_config = render_xray_config(first_node_config)
 
     config_path = '/etc/xray/config.json'
     os.makedirs(os.path.dirname(config_path), exist_ok=True)

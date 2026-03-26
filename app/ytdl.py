@@ -64,6 +64,9 @@ class DownloadInfo:
         self.playlist_item_limit = playlist_item_limit
         self.split_by_chapters = split_by_chapters
         self.chapter_template = chapter_template
+        self.proxy_generation_started = None
+        self.failover_attempts = 0
+        self.attempted_node_fingerprints = []
 
 class Download:
     manager = None
@@ -357,9 +360,11 @@ class PersistentQueue:
                 log.debug(f"{log_prefix} failed: 'sqlite3' was not found")
                 
 class DownloadQueue:
-    def __init__(self, config, notifier):
+    def __init__(self, config, notifier, proxy_runtime=None, proxy_failover=None):
         self.config = config
         self.notifier = notifier
+        self.proxy_runtime = proxy_runtime
+        self.proxy_failover = proxy_failover
         self.queue = PersistentQueue("queue", self.config.STATE_DIR + '/queue')
         self.done = PersistentQueue("completed", self.config.STATE_DIR + '/completed')
         self.pending = PersistentQueue("pending", self.config.STATE_DIR + '/pending')
@@ -389,15 +394,17 @@ class DownloadQueue:
                 log.info(f"Download {download.info.title} was canceled, skipping start.")
                 return
             await download.start(self.notifier)
-            self._post_download_cleanup(download)
+            await self._post_download_cleanup(download)
 
-    def _post_download_cleanup(self, download):
+    async def _post_download_cleanup(self, download):
         if download.info.status != 'finished':
             if download.tmpfilename and os.path.isfile(download.tmpfilename):
                 try:
                     os.remove(download.tmpfilename)
                 except:
                     pass
+            if await self._handle_failed_download(download) == 'requeued':
+                return
             download.info.status = 'error'
         download.close()
         if self.queue.exists(download.info.url):
@@ -407,6 +414,37 @@ class DownloadQueue:
             else:
                 self.done.put(download)
                 asyncio.create_task(self.notifier.completed(download.info))
+
+    async def _handle_failed_download(self, download):
+        if self.proxy_runtime is None or self.proxy_failover is None:
+            return 'final_fail'
+
+        self._initialize_failover_tracking(download.info)
+        if download.info.failover_attempts >= 3:
+            return 'final_fail'
+
+        error_text = download.info.msg or download.info.error or 'download failed'
+        decision = await self.proxy_failover.handle_retryable_failure(
+            task=download.info,
+            error_text=error_text,
+        )
+        if decision == 'final_fail':
+            return 'final_fail'
+
+        current_fingerprint = self.proxy_runtime.active_node_fingerprint
+        attempted = list(download.info.attempted_node_fingerprints)
+        if current_fingerprint is None or current_fingerprint in attempted:
+            return 'final_fail'
+
+        attempted.append(current_fingerprint)
+        download.info.attempted_node_fingerprints = attempted
+        download.info.failover_attempts += 1
+        download.info.proxy_generation_started = self.proxy_runtime.current_generation
+        download.close()
+        self.queue.put(download)
+        if isinstance(download, Download):
+            asyncio.create_task(self.__start_download(download))
+        return 'requeued'
 
     def __extract_info(self, url):
         debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
@@ -440,6 +478,9 @@ class DownloadQueue:
         return dldirectory, None
 
     async def __add_download(self, dl, auto_start):
+        self._initialize_failover_tracking(dl)
+        if self.proxy_runtime is not None:
+            dl.proxy_generation_started = self.proxy_runtime.current_generation
         dldirectory, error_message = self.__calc_download_path(dl.quality, dl.format, dl.folder)
         if error_message is not None:
             return error_message
@@ -575,3 +616,12 @@ class DownloadQueue:
         return (list((k, v.info) for k, v in self.queue.items()) +
                 list((k, v.info) for k, v in self.pending.items()),
                 list((k, v.info) for k, v in self.done.items()))
+
+    @staticmethod
+    def _initialize_failover_tracking(info):
+        if not hasattr(info, 'proxy_generation_started'):
+            info.proxy_generation_started = None
+        if not hasattr(info, 'failover_attempts'):
+            info.failover_attempts = 0
+        if not hasattr(info, 'attempted_node_fingerprints'):
+            info.attempted_node_fingerprints = []

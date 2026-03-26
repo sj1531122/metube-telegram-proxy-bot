@@ -16,6 +16,8 @@ import pathlib
 import re
 from watchfiles import DefaultFilter, Change, awatch
 
+from proxy_failover import ProxyFailoverCoordinator
+from proxy_runtime import build_proxy_runtime
 from ytdl import DownloadQueueNotifier, DownloadQueue
 from yt_dlp.version import __version__ as yt_dlp_version
 
@@ -177,7 +179,28 @@ class Notifier(DownloadQueueNotifier):
         log.info(f"Notifier: Download cleared - {id}")
         await sio.emit('cleared', serializer.encode(id))
 
-dqueue = DownloadQueue(config, Notifier())
+proxy_runtime = build_proxy_runtime(
+    state_dir=config.STATE_DIR,
+    environ=os.environ,
+)
+proxy_failover = (
+    ProxyFailoverCoordinator(runtime_manager=proxy_runtime)
+    if proxy_runtime is not None
+    else None
+)
+dqueue = DownloadQueue(
+    config,
+    Notifier(),
+    proxy_runtime=proxy_runtime,
+    proxy_failover=proxy_failover,
+)
+
+async def initialize_proxy_runtime(app):
+    if proxy_runtime is None:
+        return
+    await proxy_runtime.initialize()
+
+app.on_startup.append(initialize_proxy_runtime)
 app.on_startup.append(lambda app: dqueue.initialize())
 
 class FileOpsFilter(DefaultFilter):
