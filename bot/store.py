@@ -11,6 +11,7 @@ from bot.models import (
     STATE_FINISHED,
     STATE_QUEUED,
     STATE_RECEIVED,
+    STATE_RETRYING,
     STATE_SUBMITTED,
     STATE_TIMEOUT,
 )
@@ -19,7 +20,9 @@ UNFINISHED_STATES = (
     STATE_RECEIVED,
     STATE_SUBMITTED,
     STATE_QUEUED,
+    STATE_RETRYING,
 )
+_UNSET = object()
 
 
 class TaskStore:
@@ -48,10 +51,33 @@ class TaskStore:
                     filename TEXT,
                     title TEXT,
                     last_error TEXT,
-                    notified_at REAL
+                    notified_at REAL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER,
+                    next_retry_at REAL,
+                    retry_notice_sent_at REAL,
+                    last_attempt_submitted_at REAL
                 )
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+            }
+            migrations = {
+                "retry_count": "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+                "max_retries": "ALTER TABLE tasks ADD COLUMN max_retries INTEGER",
+                "next_retry_at": "ALTER TABLE tasks ADD COLUMN next_retry_at REAL",
+                "retry_notice_sent_at": "ALTER TABLE tasks ADD COLUMN retry_notice_sent_at REAL",
+                "last_attempt_submitted_at": "ALTER TABLE tasks ADD COLUMN last_attempt_submitted_at REAL",
+            }
+            for column_name, ddl in migrations.items():
+                if column_name not in existing_columns:
+                    try:
+                        connection.execute(ddl)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
 
     def create_task(self, chat_id: int, telegram_message_id: int, source_url: str) -> int:
         submitted_at = time.time()
@@ -109,23 +135,38 @@ class TaskStore:
         task_id: int,
         state: str,
         *,
-        download_url: str | None = None,
-        filename: str | None = None,
-        title: str | None = None,
-        last_error: str | None = None,
+        download_url: str | None | object = _UNSET,
+        filename: str | None | object = _UNSET,
+        title: str | None | object = _UNSET,
+        last_error: str | None | object = _UNSET,
+        retry_count: int | object = _UNSET,
+        max_retries: int | None | object = _UNSET,
+        next_retry_at: float | None | object = _UNSET,
+        retry_notice_sent_at: float | None | object = _UNSET,
+        last_attempt_submitted_at: float | None | object = _UNSET,
     ) -> None:
+        assignments = ["state = ?"]
+        values: list[object] = [state]
+        field_values = (
+            ("download_url", download_url),
+            ("filename", filename),
+            ("title", title),
+            ("last_error", last_error),
+            ("retry_count", retry_count),
+            ("max_retries", max_retries),
+            ("next_retry_at", next_retry_at),
+            ("retry_notice_sent_at", retry_notice_sent_at),
+            ("last_attempt_submitted_at", last_attempt_submitted_at),
+        )
+        for column_name, value in field_values:
+            if value is not _UNSET:
+                assignments.append(f"{column_name} = ?")
+                values.append(value)
+        values.append(task_id)
         with self._connect() as connection:
             connection.execute(
-                """
-                UPDATE tasks
-                SET state = ?,
-                    download_url = COALESCE(?, download_url),
-                    filename = COALESCE(?, filename),
-                    title = COALESCE(?, title),
-                    last_error = COALESCE(?, last_error)
-                WHERE id = ?
-                """,
-                (state, download_url, filename, title, last_error, task_id),
+                f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
+                values,
             )
 
     def mark_notified(self, task_id: int, notified_at: float | None = None) -> None:
@@ -151,4 +192,9 @@ class TaskStore:
             title=row["title"],
             last_error=row["last_error"],
             notified_at=row["notified_at"],
+            retry_count=row["retry_count"],
+            max_retries=row["max_retries"],
+            next_retry_at=row["next_retry_at"],
+            retry_notice_sent_at=row["retry_notice_sent_at"],
+            last_attempt_submitted_at=row["last_attempt_submitted_at"],
         )

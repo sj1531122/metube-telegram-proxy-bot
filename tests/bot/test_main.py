@@ -39,8 +39,9 @@ class FakeTelegramApi:
 
 
 class FakeService:
-    def __init__(self, fail_on_update_id=None):
+    def __init__(self, fail_on_update_id=None, poll_exc=None):
         self.fail_on_update_id = fail_on_update_id
+        self.poll_exc = poll_exc
         self.handled = []
         self.poll_count = 0
 
@@ -51,6 +52,8 @@ class FakeService:
 
     async def poll_once(self):
         self.poll_count += 1
+        if self.poll_exc is not None:
+            raise self.poll_exc
 
 
 class RunIterationTests(IsolatedAsyncioTestCase):
@@ -68,18 +71,33 @@ class RunIterationTests(IsolatedAsyncioTestCase):
         telegram_api = FakeTelegramApi(exc=TelegramApiError("bad token"))
         service = FakeService()
 
-        offset = await run_iteration(service=service, telegram_api=telegram_api, offset=55)
+        with self.assertLogs("bot.main", "WARNING") as logs:
+            offset = await run_iteration(service=service, telegram_api=telegram_api, offset=55)
 
         self.assertEqual(offset, 55)
         self.assertEqual(service.handled, [])
         self.assertEqual(service.poll_count, 1)
+        self.assertTrue(any("telegram polling failed" in entry for entry in logs.output))
 
     async def test_run_iteration_skips_failed_update_and_continues(self):
         telegram_api = FakeTelegramApi(updates=[{"update_id": 101}, {"update_id": 102}])
         service = FakeService(fail_on_update_id=101)
 
-        offset = await run_iteration(service=service, telegram_api=telegram_api, offset=None)
+        with self.assertLogs("bot.main", "WARNING") as logs:
+            offset = await run_iteration(service=service, telegram_api=telegram_api, offset=None)
 
         self.assertEqual(offset, 103)
         self.assertEqual(service.handled, [101, 102])
         self.assertEqual(service.poll_count, 1)
+        self.assertTrue(any("update handling failed" in entry for entry in logs.output))
+
+    async def test_run_iteration_logs_poll_once_failure(self):
+        telegram_api = FakeTelegramApi(updates=[])
+        service = FakeService(poll_exc=TelegramApiError("history unavailable"))
+
+        with self.assertLogs("bot.main", "WARNING") as logs:
+            offset = await run_iteration(service=service, telegram_api=telegram_api, offset=55)
+
+        self.assertEqual(offset, 55)
+        self.assertEqual(service.poll_count, 1)
+        self.assertTrue(any("history polling failed" in entry for entry in logs.output))

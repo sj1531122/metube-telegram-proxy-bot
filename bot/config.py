@@ -14,6 +14,7 @@ class BotConfig:
     public_host_url: str | None
     public_host_audio_url: str | None
     sqlite_path: str
+    http_timeout_seconds: int
     poll_interval_seconds: int
     task_timeout_seconds: int
     dedupe_window_seconds: int
@@ -33,10 +34,13 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
             "METUBE_AUTH_HEADER_NAME and METUBE_AUTH_HEADER_VALUE must be provided together"
         )
 
+    http_timeout_seconds = int(env.get("BOT_HTTP_TIMEOUT_SECONDS", "30"))
     poll_interval_seconds = int(env.get("BOT_POLL_INTERVAL_SECONDS", "15"))
     task_timeout_seconds = int(env.get("BOT_TASK_TIMEOUT_SECONDS", "21600"))
     dedupe_window_seconds = int(env.get("BOT_DEDUPE_WINDOW_SECONDS", "300"))
 
+    if http_timeout_seconds <= 0:
+        raise ValueError("BOT_HTTP_TIMEOUT_SECONDS must be greater than 0")
     if poll_interval_seconds <= 0:
         raise ValueError("BOT_POLL_INTERVAL_SECONDS must be greater than 0")
     if task_timeout_seconds <= 0:
@@ -53,6 +57,7 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
         public_host_url=(env.get("PUBLIC_HOST_URL") or "").rstrip("/") or None,
         public_host_audio_url=(env.get("PUBLIC_HOST_AUDIO_URL") or "").rstrip("/") or None,
         sqlite_path=env.get("BOT_SQLITE_PATH", "bot/tasks.sqlite3"),
+        http_timeout_seconds=http_timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         task_timeout_seconds=task_timeout_seconds,
         dedupe_window_seconds=dedupe_window_seconds,

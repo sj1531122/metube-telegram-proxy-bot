@@ -39,6 +39,7 @@ class LoadConfigTests(TestCase):
                 public_host_url=None,
                 public_host_audio_url=None,
                 sqlite_path="bot/tasks.sqlite3",
+                http_timeout_seconds=30,
                 poll_interval_seconds=15,
                 task_timeout_seconds=21600,
                 dedupe_window_seconds=300,
@@ -53,6 +54,7 @@ class LoadConfigTests(TestCase):
                 "METUBE_BASE_URL": "https://metube.example/",
                 "PUBLIC_HOST_URL": "https://download.example/files/",
                 "PUBLIC_HOST_AUDIO_URL": "https://download.example/audio/",
+                "BOT_HTTP_TIMEOUT_SECONDS": "25",
                 "BOT_POLL_INTERVAL_SECONDS": "10",
                 "BOT_TASK_TIMEOUT_SECONDS": "20",
                 "BOT_DEDUPE_WINDOW_SECONDS": "30",
@@ -61,6 +63,7 @@ class LoadConfigTests(TestCase):
 
         self.assertEqual(config.public_host_url, "https://download.example/files")
         self.assertEqual(config.public_host_audio_url, "https://download.example/audio")
+        self.assertEqual(config.http_timeout_seconds, 25)
 
         with self.assertRaises(ValueError):
             load_config(
@@ -69,5 +72,15 @@ class LoadConfigTests(TestCase):
                     "TELEGRAM_ALLOWED_CHAT_ID": "42",
                     "METUBE_BASE_URL": "https://metube.example/",
                     "BOT_POLL_INTERVAL_SECONDS": "0",
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            load_config(
+                {
+                    "TELEGRAM_BOT_TOKEN": "token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                    "METUBE_BASE_URL": "https://metube.example/",
+                    "BOT_HTTP_TIMEOUT_SECONDS": "0",
                 }
             )
