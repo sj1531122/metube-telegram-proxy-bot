@@ -1,27 +1,82 @@
-# MeTube Telegram Direct Downloader
+# Telegram yt-dlp Download Bot
 
-Single-container Telegram download bot powered by local `yt-dlp`, optional Xray proxy failover, and a minimal embedded `/download/*` file server.
+Single-container Telegram downloader with local `yt-dlp`, optional Xray proxy failover, SQLite task persistence, and an embedded `/download/*` file server.
 
-单容器 Telegram 下载机器人，直接在本地执行 `yt-dlp`，可选接入 Xray 代理轮换，并在容器内提供最小化 `/download/*` 文件服务。
+单容器 Telegram 下载机器人，直接在本地执行 `yt-dlp`，可选启用 Xray 代理轮换，使用 SQLite 持久化任务，并在容器内提供 `/download/*` 文件服务。
 
-## What This Branch Does
+## Overview
 
-- Telegram receives URLs from one allowed chat
-- tasks are persisted in SQLite
-- one serial worker downloads exactly one task at a time
-- successful downloads are exposed under one `/download/*` path
-- optional `VPN_SUBSCRIPTION_URL` enables Xray-based node switching
-- proxy invalidation and YouTube rate-limit errors can automatically switch nodes and retry
-- active node and cooldown state survive container restart
+This repository no longer depends on MeTube as the runtime download backend.
 
-## Scope
+Current `main` is designed for one practical deployment target:
 
-- single user
-- single chat
-- single queue
-- no web UI
-- no MeTube API
-- no separate audio URL path
+- one bot
+- one allowed chat
+- one serial download worker
+- one public download path: `/download/*`
+
+Verified production flow:
+
+1. Send a URL to the Telegram bot.
+2. The bot stores the task in SQLite and replies `Queued: <url>`.
+3. A single worker runs `yt-dlp` locally inside the container.
+4. The file is exposed through the built-in HTTP server.
+5. The bot replies with:
+   - `Finished: <title>`
+   - `<PUBLIC_DOWNLOAD_BASE_URL>/<filename>`
+
+If proxy runtime is enabled, the worker can automatically switch proxy nodes and retry when it hits invalid nodes, network failures, or YouTube-style rate-limit / anti-bot errors.
+
+## What This Project Includes
+
+- Telegram polling bot
+- single-user and single-chat allowlist control
+- SQLite task persistence under `data/state`
+- one serial worker, no concurrent downloads
+- embedded HTTP file server on container port `8081`
+- one public file path only: `/download/*`
+- optional `VPN_SUBSCRIPTION_URL` support
+- Xray node parsing from dynamic subscription content
+- automatic proxy failover and retry
+- proxy state persistence across container restart
+
+## What This Project Does Not Include
+
+- MeTube web UI
+- MeTube API as the active download backend
+- separate audio download URL path
+- webhook mode
+- multi-user or multi-chat isolation
+
+## Architecture
+
+Runtime flow:
+
+`Telegram -> bot polling -> SQLite queue -> yt-dlp worker -> /download/* -> Telegram reply`
+
+When `VPN_SUBSCRIPTION_URL` is configured:
+
+`subscription -> parsed nodes -> Xray local outbound -> yt-dlp --proxy http://127.0.0.1:10809`
+
+Proxy runtime behavior:
+
+- startup loads subscription nodes and picks the last active usable node when possible
+- node failure writes cooldown state to disk
+- switching nodes refreshes the subscription again, so dynamic node lists are supported
+- active node fingerprint and cooldown entries survive container restart
+
+## Directory Layout
+
+Important runtime directories:
+
+- `data/downloads`
+  - downloaded files returned to Telegram users
+- `data/state`
+  - SQLite database
+  - proxy state
+  - generated Xray config
+
+The default compose file mounts both directories from the host, so downloads and proxy state survive container recreation.
 
 ## Environment Variables
 
@@ -47,82 +102,222 @@ Example file:
 
 - `.env.example`
 
-## Docker Compose
+Variable notes:
 
-1. Copy the sample env file:
+- `PUBLIC_DOWNLOAD_BASE_URL`
+  - must be the final public URL prefix visible to Telegram clients
+  - example: `https://downloads.example.com/download`
+- `VPN_SUBSCRIPTION_URL`
+  - if omitted, downloads run without proxy failover
+- `BOT_DEDUPE_WINDOW_SECONDS`
+  - suppresses repeated submission of the same normalized URL within the configured window
+- `TASK_TIMEOUT_SECONDS`
+  - hard timeout for a single `yt-dlp` execution
+
+## Docker Compose Quick Start
+
+1. Clone the repository and enter it.
+
+```bash
+git clone <your-repo-url>
+cd metube-telegram-proxy-bot
+```
+
+2. Create the env file.
 
 ```bash
 cp .env.example .env
 ```
 
-2. Fill in the real values.
+3. Fill at least these values:
 
-Important:
+```env
+TELEGRAM_BOT_TOKEN=1234567890:replace-me
+TELEGRAM_ALLOWED_CHAT_ID=123456789
+PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
+VPN_SUBSCRIPTION_URL=https://example.com/subscription
+```
 
-- `PUBLIC_DOWNLOAD_BASE_URL` must be the public URL that Telegram can open, for example:
-  - `https://downloads.example.com/download`
-- if you use the built-in file server behind Nginx, forward `/download/` to container port `8081`
-
-3. Start the service:
+4. Start the container.
 
 ```bash
 docker compose up -d --build
 ```
 
-4. Check logs:
+5. Check status and logs.
 
 ```bash
+docker compose ps
 docker compose logs -f app
 ```
 
-## Reverse Proxy
+Default compose behavior:
 
-Expose the container file server through `/download/*`.
+- container name: `metube-direct-local`
+- listens on host port `8081`
+- downloads stored in `./data/downloads`
+- state stored in `./data/state`
 
-Example Nginx location:
+## Nginx Reverse Proxy
+
+Expose only `/download/*` to the public internet.
+
+Example server block:
 
 ```nginx
-location /download/ {
-    proxy_pass http://127.0.0.1:8081/download/;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+server {
+    listen 80;
+    server_name downloads.example.com;
+
+    client_max_body_size 0;
+
+    location /download/ {
+        proxy_pass http://127.0.0.1:8081/download/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600;
+        send_timeout 3600;
+    }
+
+    location / {
+        return 404;
+    }
 }
 ```
 
-Then set:
+Then make sure `.env` uses the same public prefix:
 
 ```env
 PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 ```
 
-## Runtime Flow
+## Download and Retry Behavior
 
-1. Send a URL to the Telegram bot.
-2. The bot normalizes the URL and inserts a queued task into SQLite.
-3. The single worker claims the oldest runnable task.
-4. `yt-dlp` downloads through the current proxy node when proxy runtime is enabled.
-5. On success, the bot replies with:
-   - `Finished: <title>`
-   - `<PUBLIC_DOWNLOAD_BASE_URL>/<filename>`
-6. On proxy invalidation or rate-limit errors, the runtime switches to the next node and retries automatically.
+Task behavior:
 
-## Local Verification
+- only the configured chat ID can queue tasks
+- each incoming message may contain one or more URLs
+- URLs are normalized before de-duplication and storage
+- only one queued task is processed at a time
 
-Run the Python test suite:
+Success behavior:
+
+- the bot sends `Queued: ...`
+- after completion, the bot sends `Finished: ...` plus a direct file URL
+
+Failure behavior without proxy runtime:
+
+- transient errors may retry on the same node with delays: `10s / 30s / 60s`
+- permanent failures are reported back to Telegram
+
+Failure behavior with proxy runtime enabled:
+
+- invalid subscription node / unreachable proxy / TLS or network errors can trigger node switch
+- YouTube anti-bot / unusual traffic / rate-limit style failures can trigger node switch
+- a task can try up to 3 distinct proxy fingerprints before final failure
+- failed nodes enter cooldown and are skipped until cooldown expires
+
+## Dynamic Subscription Notes
+
+`VPN_SUBSCRIPTION_URL` can return a changing node list. This is supported by design.
+
+Why it works:
+
+- startup parses the current subscription content
+- every node switch refreshes the subscription again
+- persisted state tracks fingerprints instead of fixed list positions only
+
+Operational consequence:
+
+- if the first node becomes invalid, later retries can move to a fresh node from the updated subscription
+- if a previously good node is rate-limited by YouTube, it can be cooled down and bypassed on later attempts
+
+## Local Non-Docker Run
+
+If you want to run it directly with Python:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install uv
+uv sync --frozen
+set -a
+source .env
+set +a
+python -m bot.main
+```
+
+This mode still expects `yt-dlp`, `ffmpeg`, and optional `xray` to be available on the machine.
+
+## Verification
+
+Python test suite:
 
 ```bash
 .venv/bin/python -m unittest discover -t . -s tests -v
 ```
 
-Build the container:
+Docker build:
 
 ```bash
 docker build -t metube-direct-local .
 ```
 
-Run the compose stack:
+Runtime smoke checks:
 
 ```bash
-docker compose up --build
+docker compose ps
+ss -ltnp | grep 8081
+curl -I http://127.0.0.1:8081/download/notfound
 ```
+
+Telegram verification:
+
+1. Send a normal media URL from the allowed chat.
+2. Confirm you receive `Queued: ...`.
+3. Wait for `Finished: ...` and open the returned link.
+4. If proxy runtime is enabled, test a URL that previously triggered rate-limit behavior and confirm automatic retry/failover is visible in logs.
+
+## Operations
+
+Common commands:
+
+```bash
+docker compose up -d --build
+docker compose logs -f app
+docker compose restart app
+docker compose down
+```
+
+Useful host paths:
+
+- `data/downloads`
+- `data/state/tasks.sqlite3`
+- `data/state/proxy_state.json`
+
+## Limits
+
+This project intentionally keeps the scope small:
+
+- single bot process
+- single worker
+- single download queue
+- polling only
+- no task priority
+- no resumable dashboard
+- no multi-tenant permission model
+
+## Upstream Components
+
+- `yt-dlp`: https://github.com/yt-dlp/yt-dlp
+- `Xray-core`: https://github.com/XTLS/Xray-core
+
+Historical note:
+
+- the repository started from a MeTube-oriented direction
+- the active runtime on `main` is now the direct `yt-dlp` single-container design
