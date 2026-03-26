@@ -84,3 +84,30 @@ class LoadConfigTests(TestCase):
                     "BOT_HTTP_TIMEOUT_SECONDS": "0",
                 }
             )
+
+    def test_load_config_parses_local_runtime_settings(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download/",
+                "DOWNLOAD_DIR": "/srv/downloads",
+                "STATE_DIR": "/srv/state",
+                "HTTP_BIND": "0.0.0.0",
+                "HTTP_PORT": "8081",
+                "HTTP_TIMEOUT_SECONDS": "45",
+                "POLL_INTERVAL_SECONDS": "2.5",
+                "TASK_TIMEOUT_SECONDS": "900",
+                "BOT_DEDUPE_WINDOW_SECONDS": "30",
+            }
+        )
+
+        self.assertEqual(config.public_download_base_url, "https://downloads.example.com/download")
+        self.assertEqual(config.download_dir, "/srv/downloads")
+        self.assertEqual(config.state_dir, "/srv/state")
+        self.assertEqual(config.sqlite_path, "/srv/state/tasks.sqlite3")
+        self.assertEqual(config.http_bind, "0.0.0.0")
+        self.assertEqual(config.http_port, 8081)
+        self.assertEqual(config.http_timeout_seconds, 45)
+        self.assertEqual(config.poll_interval_seconds, 2.5)
+        self.assertEqual(config.task_timeout_seconds, 900)

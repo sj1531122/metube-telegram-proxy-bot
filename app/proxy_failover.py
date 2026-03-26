@@ -13,7 +13,6 @@ SWITCH_PATTERNS = (
     "connection refused",
     "network is unreachable",
     "connection reset by peer",
-    "timed out",
     "proxy error",
     "socks",
     "tls handshake",
@@ -24,6 +23,13 @@ SWITCH_PATTERNS = (
     "unusual traffic",
     "rate limit",
     "request has been blocked",
+)
+
+RETRY_SAME_NODE_PATTERNS = (
+    "timed out",
+    "temporary failure",
+    "remote end closed connection",
+    "connection aborted",
 )
 
 FINAL_FAIL_PATTERNS = (
@@ -43,6 +49,10 @@ def classify_download_error(error_text: str) -> FailoverDecision:
     for pattern in FINAL_FAIL_PATTERNS:
         if pattern in normalized:
             return FailoverDecision("final_fail", pattern)
+
+    for pattern in RETRY_SAME_NODE_PATTERNS:
+        if pattern in normalized:
+            return FailoverDecision("retry_same_node", pattern)
 
     for pattern in SWITCH_PATTERNS:
         if pattern in normalized:

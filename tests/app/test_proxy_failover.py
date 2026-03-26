@@ -1,16 +1,8 @@
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
-import sys
 import unittest
 
-
-APP_DIR = Path(__file__).resolve().parents[2] / "app"
-
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-from proxy_failover import ProxyFailoverCoordinator, classify_download_error
+from app.proxy_failover import ProxyFailoverCoordinator, classify_download_error
 
 
 @dataclass
@@ -31,6 +23,11 @@ class FakeRuntimeManager:
 
 
 class ErrorClassificationTests(unittest.TestCase):
+    def test_classify_transient_network_error_as_retry_same_node(self) -> None:
+        decision = classify_download_error("Read timed out while requesting video metadata")
+
+        self.assertEqual(decision.action, "retry_same_node")
+
     def test_classify_proxy_connectivity_error_as_switch_node(self) -> None:
         decision = classify_download_error("connection reset by peer while connecting through proxy")
 

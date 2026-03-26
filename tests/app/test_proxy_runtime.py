@@ -3,18 +3,11 @@ import base64
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import sys
 import unittest
 
-
-APP_DIR = Path(__file__).resolve().parents[2] / "app"
-
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-from proxy_runtime import ProxyRuntimeManager, build_proxy_runtime
-from proxy_state import ProxyState, save_proxy_state
-import vpn
+from app.proxy_runtime import ProxyRuntimeManager, build_proxy_runtime
+from app.proxy_state import ProxyState, save_proxy_state
+from app import vpn
 
 
 def _make_vmess_link(*, host: str, port: int, node_id: str, name: str) -> str:

@@ -6,8 +6,8 @@ import subprocess
 import time
 from typing import Callable
 
-from proxy_state import ProxyState, load_proxy_state, save_proxy_state
-import vpn
+from app.proxy_state import ProxyState, load_proxy_state, save_proxy_state
+from app import vpn
 
 
 class ProxyRuntimeManager:

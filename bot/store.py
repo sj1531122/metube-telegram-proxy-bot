@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Iterable
 
 from bot.models import (
     BotTask,
+    STATE_DOWNLOADING,
     STATE_FAILED,
     STATE_FINISHED,
     STATE_QUEUED,
@@ -20,6 +21,7 @@ UNFINISHED_STATES = (
     STATE_RECEIVED,
     STATE_SUBMITTED,
     STATE_QUEUED,
+    STATE_DOWNLOADING,
     STATE_RETRYING,
 )
 _UNSET = object()
@@ -51,7 +53,12 @@ class TaskStore:
                     filename TEXT,
                     title TEXT,
                     last_error TEXT,
+                    started_at REAL,
+                    finished_at REAL,
                     notified_at REAL,
+                    proxy_generation_started INTEGER,
+                    failover_attempts INTEGER NOT NULL DEFAULT 0,
+                    attempted_node_fingerprints TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     max_retries INTEGER,
                     next_retry_at REAL,
@@ -70,6 +77,11 @@ class TaskStore:
                 "next_retry_at": "ALTER TABLE tasks ADD COLUMN next_retry_at REAL",
                 "retry_notice_sent_at": "ALTER TABLE tasks ADD COLUMN retry_notice_sent_at REAL",
                 "last_attempt_submitted_at": "ALTER TABLE tasks ADD COLUMN last_attempt_submitted_at REAL",
+                "started_at": "ALTER TABLE tasks ADD COLUMN started_at REAL",
+                "finished_at": "ALTER TABLE tasks ADD COLUMN finished_at REAL",
+                "proxy_generation_started": "ALTER TABLE tasks ADD COLUMN proxy_generation_started INTEGER",
+                "failover_attempts": "ALTER TABLE tasks ADD COLUMN failover_attempts INTEGER NOT NULL DEFAULT 0",
+                "attempted_node_fingerprints": "ALTER TABLE tasks ADD COLUMN attempted_node_fingerprints TEXT",
             }
             for column_name, ddl in migrations.items():
                 if column_name not in existing_columns:
@@ -92,7 +104,7 @@ class TaskStore:
                     state
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
-                (chat_id, telegram_message_id, source_url, submitted_at, STATE_RECEIVED),
+                (chat_id, telegram_message_id, source_url, submitted_at, STATE_QUEUED),
             )
             return int(cursor.lastrowid)
 
@@ -130,15 +142,82 @@ class TaskStore:
             ).fetchall()
         return [self._row_to_task(row) for row in rows]
 
+    def list_pending_notifications(self) -> list[BotTask]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE state IN (?, ?, ?)
+                  AND notified_at IS NULL
+                ORDER BY submitted_at ASC
+                """,
+                (STATE_FINISHED, STATE_FAILED, STATE_TIMEOUT),
+            ).fetchall()
+        return [self._row_to_task(row) for row in rows]
+
+    def claim_next_runnable_task(self, *, now: float | None = None) -> BotTask | None:
+        if now is None:
+            now = time.time()
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM tasks
+                WHERE state = ?
+                   OR (state = ? AND (next_retry_at IS NULL OR next_retry_at <= ?))
+                ORDER BY submitted_at ASC
+                LIMIT 1
+                """,
+                (STATE_QUEUED, STATE_RETRYING, now),
+            ).fetchone()
+            if row is None:
+                return None
+
+            connection.execute(
+                """
+                UPDATE tasks
+                SET state = ?, started_at = ?, next_retry_at = NULL
+                WHERE id = ?
+                """,
+                (STATE_DOWNLOADING, now, row["id"]),
+            )
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (row["id"],),
+            ).fetchone()
+
+        return None if row is None else self._row_to_task(row)
+
+    def recover_inflight_tasks(self, *, now: float | None = None) -> int:
+        if now is None:
+            now = time.time()
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tasks
+                SET state = ?, next_retry_at = ?
+                WHERE state = ?
+                """,
+                (STATE_RETRYING, now, STATE_DOWNLOADING),
+            )
+            return cursor.rowcount
+
     def update_task_state(
         self,
         task_id: int,
         state: str,
         *,
+        started_at: float | None | object = _UNSET,
+        finished_at: float | None | object = _UNSET,
         download_url: str | None | object = _UNSET,
         filename: str | None | object = _UNSET,
         title: str | None | object = _UNSET,
         last_error: str | None | object = _UNSET,
+        proxy_generation_started: int | None | object = _UNSET,
+        failover_attempts: int | object = _UNSET,
+        attempted_node_fingerprints: list[str] | None | object = _UNSET,
         retry_count: int | object = _UNSET,
         max_retries: int | None | object = _UNSET,
         next_retry_at: float | None | object = _UNSET,
@@ -147,11 +226,22 @@ class TaskStore:
     ) -> None:
         assignments = ["state = ?"]
         values: list[object] = [state]
+        serialized_attempted_node_fingerprints = attempted_node_fingerprints
+        if attempted_node_fingerprints is not _UNSET:
+            if attempted_node_fingerprints is None:
+                serialized_attempted_node_fingerprints = None
+            else:
+                serialized_attempted_node_fingerprints = json.dumps(attempted_node_fingerprints)
         field_values = (
+            ("started_at", started_at),
+            ("finished_at", finished_at),
             ("download_url", download_url),
             ("filename", filename),
             ("title", title),
             ("last_error", last_error),
+            ("proxy_generation_started", proxy_generation_started),
+            ("failover_attempts", failover_attempts),
+            ("attempted_node_fingerprints", serialized_attempted_node_fingerprints),
             ("retry_count", retry_count),
             ("max_retries", max_retries),
             ("next_retry_at", next_retry_at),
@@ -187,14 +277,33 @@ class TaskStore:
             source_url=row["source_url"],
             state=row["state"],
             submitted_at=row["submitted_at"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
             download_url=row["download_url"],
             filename=row["filename"],
             title=row["title"],
             last_error=row["last_error"],
             notified_at=row["notified_at"],
+            proxy_generation_started=row["proxy_generation_started"],
+            failover_attempts=row["failover_attempts"],
+            attempted_node_fingerprints=TaskStore._decode_attempted_node_fingerprints(
+                row["attempted_node_fingerprints"]
+            ),
             retry_count=row["retry_count"],
             max_retries=row["max_retries"],
             next_retry_at=row["next_retry_at"],
             retry_notice_sent_at=row["retry_notice_sent_at"],
             last_attempt_submitted_at=row["last_attempt_submitted_at"],
         )
+
+    @staticmethod
+    def _decode_attempted_node_fingerprints(raw_value: str | None) -> list[str]:
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [str(item) for item in payload]

@@ -3,7 +3,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from bot.models import STATE_FINISHED, STATE_RECEIVED, STATE_RETRYING, STATE_SUBMITTED
+from bot.models import (
+    STATE_DOWNLOADING,
+    STATE_FAILED,
+    STATE_FINISHED,
+    STATE_QUEUED,
+    STATE_RECEIVED,
+    STATE_RETRYING,
+    STATE_SUBMITTED,
+    STATE_TIMEOUT,
+)
 from bot.store import TaskStore
 
 
@@ -26,7 +35,7 @@ class TaskStoreTests(TestCase):
             self.assertEqual(task.chat_id, 1)
             self.assertEqual(task.telegram_message_id, 10)
             self.assertEqual(task.source_url, "https://a.example")
-            self.assertEqual(task.state, STATE_RECEIVED)
+            self.assertEqual(task.state, STATE_QUEUED)
 
     def test_find_recent_duplicate_returns_matching_task(self):
         with TemporaryDirectory() as tmp:
@@ -206,7 +215,7 @@ class TaskStoreTests(TestCase):
 
         store._init_db()
 
-        self.assertEqual(len(fake_connection.alter_calls), 5)
+        self.assertEqual(len(fake_connection.alter_calls), 10)
 
     def test_list_unfinished_tasks_includes_retrying(self):
         with TemporaryDirectory() as tmp:
@@ -229,3 +238,97 @@ class TaskStoreTests(TestCase):
             unfinished_ids = {task.id for task in store.list_unfinished_tasks()}
             self.assertIn(retrying_task_id, unfinished_ids)
             self.assertNotIn(done_task_id, unfinished_ids)
+
+    def test_local_execution_metadata_roundtrip(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            store = TaskStore(db_path)
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://a.example",
+            )
+
+            store.update_task_state(
+                task_id,
+                STATE_DOWNLOADING,
+                started_at=101.0,
+                finished_at=111.0,
+                proxy_generation_started=3,
+                failover_attempts=2,
+                attempted_node_fingerprints=["node-a", "node-b"],
+            )
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.started_at, 101.0)
+            self.assertEqual(task.finished_at, 111.0)
+            self.assertEqual(task.proxy_generation_started, 3)
+            self.assertEqual(task.failover_attempts, 2)
+            self.assertEqual(task.attempted_node_fingerprints, ["node-a", "node-b"])
+
+    def test_claim_next_runnable_task_prefers_oldest_ready_retry(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            store = TaskStore(db_path)
+            queued_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://queued.example",
+            )
+            retry_id = store.create_task(
+                chat_id=2,
+                telegram_message_id=20,
+                source_url="https://retry.example",
+            )
+
+            store.update_task_state(retry_id, STATE_RETRYING, next_retry_at=100.0)
+            claimed = store.claim_next_runnable_task(now=100.0)
+
+            self.assertEqual(claimed.id, queued_id)
+            self.assertEqual(store.get_task(queued_id).state, STATE_DOWNLOADING)
+            self.assertEqual(store.get_task(queued_id).started_at, 100.0)
+
+    def test_list_pending_notifications_returns_unnotified_terminal_tasks(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            store = TaskStore(db_path)
+            finished_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://done.example",
+            )
+            failed_id = store.create_task(
+                chat_id=2,
+                telegram_message_id=20,
+                source_url="https://fail.example",
+            )
+            ignored_id = store.create_task(
+                chat_id=3,
+                telegram_message_id=30,
+                source_url="https://ignored.example",
+            )
+
+            store.update_task_state(finished_id, STATE_FINISHED)
+            store.update_task_state(failed_id, STATE_FAILED)
+            store.update_task_state(ignored_id, STATE_TIMEOUT)
+            store.mark_notified(ignored_id, notified_at=123.0)
+
+            pending_ids = {task.id for task in store.list_pending_notifications()}
+            self.assertEqual(pending_ids, {finished_id, failed_id})
+
+    def test_recover_inflight_tasks_marks_downloading_tasks_retrying(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            store = TaskStore(db_path)
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://downloading.example",
+            )
+
+            store.update_task_state(task_id, STATE_DOWNLOADING, started_at=50.0)
+            store.recover_inflight_tasks(now=200.0)
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_RETRYING)
+            self.assertEqual(task.next_retry_at, 200.0)

@@ -1,10 +1,12 @@
+import asyncio
 import runpy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from bot.errors import TelegramApiError
-from bot.main import main, run_iteration
+from bot.main import main, run_bot, run_iteration
 
 
 class MainModuleTests(TestCase):
@@ -101,3 +103,44 @@ class RunIterationTests(IsolatedAsyncioTestCase):
         self.assertEqual(offset, 55)
         self.assertEqual(service.poll_count, 1)
         self.assertTrue(any("history polling failed" in entry for entry in logs.output))
+
+
+class RunBotTests(IsolatedAsyncioTestCase):
+    async def test_run_bot_initializes_proxy_worker_and_file_server(self):
+        config = SimpleNamespace(
+            telegram_bot_token="token",
+            telegram_allowed_chat_id=42,
+            sqlite_path="state/tasks.sqlite3",
+            state_dir="state",
+            download_dir="downloads",
+            http_bind="0.0.0.0",
+            http_port=8081,
+            http_timeout_seconds=30,
+            poll_interval_seconds=1.0,
+            task_timeout_seconds=600,
+            dedupe_window_seconds=300,
+            public_download_base_url="https://downloads.example.com/download",
+        )
+        store = MagicMock()
+        proxy_runtime = SimpleNamespace(initialize=AsyncMock())
+        server = SimpleNamespace(close=AsyncMock())
+        worker = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+
+        with (
+            patch("bot.main.load_config", return_value=config),
+            patch("bot.main.TaskStore", return_value=store),
+            patch("bot.main.TelegramApi"),
+            patch("bot.main.BotService"),
+            patch("bot.main.build_proxy_runtime", return_value=proxy_runtime),
+            patch("bot.main.start_download_server", AsyncMock(return_value=server)),
+            patch("bot.main.DownloadWorker", return_value=worker),
+            patch("bot.main.run_iteration", AsyncMock(side_effect=asyncio.CancelledError)),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await run_bot()
+
+        store.recover_inflight_tasks.assert_called_once()
+        proxy_runtime.initialize.assert_awaited_once()
+        worker.start.assert_awaited_once()
+        worker.stop.assert_awaited_once()
+        server.close.assert_awaited_once()

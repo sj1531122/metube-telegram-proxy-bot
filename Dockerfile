@@ -1,70 +1,19 @@
-FROM node:lts-alpine AS builder
-
-WORKDIR /metube
-COPY ui ./
-RUN corepack enable && corepack prepare pnpm --activate
-RUN CI=true pnpm install && pnpm run build
-
-
-FROM rust:1.93-slim AS bgutil-builder
-
-WORKDIR /src
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      curl \
-      ca-certificates \
-      build-essential \
-      pkg-config \
-      libssl-dev \
-      python3 && \
-    BGUTIL_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest | sed 's#.*/tag/##')" && \
-    curl -L "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/archive/refs/tags/${BGUTIL_TAG}.tar.gz" \
-      | tar -xz --strip-components=1 && \
-    cargo build --release
-
-
 FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock docker-entrypoint.sh ./
+COPY pyproject.toml uv.lock ./
 
-# Use sed to strip carriage-return characters from the entrypoint script (in case building on Windows)
-# Install dependencies
-RUN sed -i 's/\r$//g' docker-entrypoint.sh && \
-    chmod +x docker-entrypoint.sh && \
-    apt-get update && \
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
-      ffmpeg \
-      unzip \
-      aria2 \
-      coreutils \
-      gosu \
       curl \
+      ffmpeg \
       tini \
-      file \
-      gdbmtool \
-      sqlite3 \
-      build-essential && \
-    curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \
-    UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --no-dev --compile-bytecode && \
-    uv cache clean && \
-    rm -f /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/uvw && \
-    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- -y && \
-    apt-get purge -y --auto-remove build-essential && \
-    rm -rf /var/lib/apt/lists/* && \
-    mkdir /.cache && chmod 777 /.cache
-
-COPY --from=bgutil-builder /src/target/release/bgutil-pot /usr/local/bin/bgutil-pot
-
-RUN BGUTIL_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest | sed 's#.*/tag/##')" && \
-    PLUGIN_DIR="$(python3 -c 'import site; print(site.getsitepackages()[0])')" && \
-    curl -L -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
-      "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-ytdlp-pot-provider-rs.zip" && \
-    unzip -q /tmp/bgutil-ytdlp-pot-provider-rs.zip -d "${PLUGIN_DIR}" && \
-    rm /tmp/bgutil-ytdlp-pot-provider-rs.zip
+      unzip && \
+    pip install --no-cache-dir uv && \
+    UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --no-dev && \
+    rm -rf /root/.cache/pip /root/.cache/uv /var/lib/apt/lists/*
 
 RUN XRAY_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest | sed 's#.*/tag/##')" && \
     curl -L -o /tmp/xray.zip \
@@ -73,24 +22,17 @@ RUN XRAY_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/X
     mv /tmp/xray/xray /usr/local/bin/ && \
     mv /tmp/xray/*.dat /usr/local/bin/ && \
     rm -rf /tmp/xray /tmp/xray.zip && \
-    chmod +x /usr/local/bin/xray && \
-    mkdir -p /etc/xray
+    chmod +x /usr/local/bin/xray
 
 COPY app ./app
-COPY --from=builder /metube/dist/metube ./ui/dist/metube
+COPY bot ./bot
 
-ENV UID=1000
-ENV GID=1000
-ENV UMASK=022
+ENV DOWNLOAD_DIR=/downloads
+ENV STATE_DIR=/state
+ENV HTTP_BIND=0.0.0.0
+ENV HTTP_PORT=8081
 
-ENV DOWNLOAD_DIR /downloads
-ENV STATE_DIR /downloads/.metube
-ENV TEMP_DIR /downloads
-VOLUME /downloads
+VOLUME ["/downloads", "/state"]
 EXPOSE 8081
 
-# Add build-time argument for version
-ARG VERSION=dev
-ENV METUBE_VERSION=$VERSION
-
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "./docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "python", "-m", "bot.main"]
