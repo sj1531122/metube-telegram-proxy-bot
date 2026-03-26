@@ -1,107 +1,142 @@
 # MeTube Telegram Proxy Bot
 
-Standalone Telegram download bot project powered by MeTube as the download backend.
+Standalone Telegram download bot powered by MeTube as the download backend.
 
-独立 Telegram 下载机器人项目，以 MeTube 作为下载后端。
+独立 Telegram 下载机器人，以 MeTube 作为下载后端。
+
+## Verified Status
+
+This repository is no longer just a design target. The current `main` branch has been implemented and manually verified in a real server deployment.
+
+已验证通过的主流程：
+
+- Telegram 发送链接后，Bot 将任务提交给远端 MeTube
+- 下载完成后，Bot 回传可直接点击的下载链接
+- Bot 与 MeTube 可分离部署，不要求在同一台机器上
+- `systemd` 常驻运行方案已验证通过
+- SQLite 任务持久化已验证通过
+- 自动重试已验证通过：
+  - 首次失败后只发送一次自动重试提示
+  - 固定退避重试 5 次：`30 / 60 / 120 / 300 / 600` 秒
+  - 成功重试后会清理旧的 failed history，避免被旧记录再次误判
+- YouTube 短链接与跟踪参数规范化匹配已验证通过：
+  - `youtu.be/...`
+  - `youtube.com/watch?...&si=...`
 
 ## 中文
 
-### 项目定位
+### 项目简介
 
-这个仓库的目标是构建一个独立的 Telegram 下载机器人：
+这个项目面向单用户、单聊天场景，目标很直接：
 
-- 你把链接发到 Telegram
+- 你把下载链接发给 Telegram Bot
 - Bot 把任务提交到远端 MeTube
-- MeTube 负责通过 yt-dlp 执行下载
+- MeTube 负责调用 `yt-dlp` 执行下载
 - 下载完成后，Bot 把可直接访问的下载链接回发到 Telegram
 
-这个项目同时考虑了代理环境、远端 MeTube 部署，以及 Telegram 与下载服务分离运行的场景。
+这个项目适合下面这类部署方式：
 
-### 当前状态
+- Telegram Bot 和 MeTube 分离部署
+- MeTube 放在单独服务器上
+- MeTube 所在网络已经配置好代理或可正常访问目标站点
+- Telegram 只作为任务入口和结果通知通道
 
-当前仓库还处于开发中，定位已经确定，但功能尚未全部落地：
+### 已验证功能
 
-- 当前代码主体仍然是 MeTube 基底代码
-- Telegram Bot 已有 MVP 代码骨架，位于 `bot/`
-- 任务提交、状态持久化、MeTube 轮询和 Telegram 回执的核心单元测试已就位
-- README 现在描述的是仓库目标方向，而不是“已经全部完成的功能”
+当前 `main` 分支已经验证通过的能力：
 
-### 项目介绍
-
-这个项目解决的问题很直接：
-
-- 不再依赖手动打开 MeTube 页面提交下载
-- 通过 Telegram 统一发送下载任务
-- 由远端 MeTube 负责下载和文件托管
-- 下载完成后，通过 Telegram 回传直链
-
-MVP 目标是单用户、单聊天场景，不做多用户、多租户或复杂交互。
+- Telegram 消息收取与 URL 提取
+- 单聊天白名单限制
+- 远端 MeTube `POST /add` 任务提交
+- MeTube `GET /history` 轮询
+- 下载完成后回传公网直链
+- 音频与视频下载链接分别使用不同公开前缀
+- SQLite 任务状态持久化
+- 去重窗口控制，避免短时间重复提交
+- 超时保护与基础日志记录
+- `systemd` 后台常驻运行
+- 失败自动重试
+- YouTube 短链接标准化匹配
 
 ### 架构说明
 
 系统边界如下：
 
-1. Telegram Bot 与 MeTube 分离部署，不在同一台机器上。
-2. Bot 负责接收 Telegram 消息、提取 URL、调用 MeTube API、轮询下载结果、发送回执。
-3. MeTube 负责 yt-dlp 下载、文件落盘、下载历史和静态文件暴露。
-4. 反向代理负责保护 `/add`、`/history` 等 API，同时公开 `/download/*`、`/audio_download/*` 文件路径，确保 Telegram 收到的是可直接点击的下载链接。
+1. Telegram Bot 接收消息并提取下载链接。
+2. Bot 调用远端 MeTube API 提交任务。
+3. MeTube 负责 `yt-dlp` 下载、文件落盘和历史记录维护。
+4. Bot 通过轮询 MeTube 历史判断任务结果。
+5. 成功后，Bot 向 Telegram 回发可直接打开的下载链接。
 
 目标数据流：
 
 `Telegram -> Bot -> MeTube API -> yt-dlp download -> public file URL -> Telegram`
 
-### 开发中路线图
+推荐的公网暴露方式：
 
-- [x] 仓库初始化与 GitHub 上传
-- [x] 项目方向与架构设计
-- [x] README 项目定位重写
-- [ ] Telegram Bot MVP
-- [ ] MeTube API 客户端封装
-- [ ] SQLite 任务状态持久化
-- [ ] 下载完成轮询与通知
-- [ ] 公开下载链接与 API 鉴权分流
-- [ ] 部署文档
+- 保护 API：
+  - `/add`
+  - `/history`
+  - `/delete`
+- 公开文件下载路径：
+  - `/download/*`
+  - `/audio_download/*`
 
-### 当前仓库说明
+### 自动重试行为
 
-当前仓库包含：
+当前版本的自动重试策略已经落地并验证：
 
-- MeTube 基础代码
-- Telegram Bot 设计文档
-- `.env.example` 示例配置
-- 后续 Bot 开发所需的同仓库基础
+- 首次失败时：
+  - Bot 不会立刻判定最终失败
+  - 会发送一次提示：`Failed once, retrying automatically (1/5): ...`
+- 后续不会连续刷屏发送每次重试通知
+- 重试间隔固定为：
+  - `30s`
+  - `60s`
+  - `120s`
+  - `300s`
+  - `600s`
+- 如果后续某次成功：
+  - 只发送最终成功消息
+- 如果 5 次重试全部失败：
+  - 才发送最终失败消息
 
-设计文档见：
+### 环境变量
 
-- `docs/superpowers/specs/2026-03-25-telegram-bot-metube-design.md`
-
-环境变量示例见：
+示例文件：
 
 - `.env.example`
 
-在 Telegram Bot 代码落地之前，如果你想了解当前下载后端能力，请参考上游 MeTube 项目文档。
+当前使用的关键变量：
 
-### 最小运行说明
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_CHAT_ID`
+- `METUBE_BASE_URL`
+- `METUBE_AUTH_HEADER_NAME`
+- `METUBE_AUTH_HEADER_VALUE`
+- `PUBLIC_HOST_URL`
+- `PUBLIC_HOST_AUDIO_URL`
+- `BOT_SQLITE_PATH`
+- `BOT_HTTP_TIMEOUT_SECONDS`
+- `BOT_POLL_INTERVAL_SECONDS`
+- `BOT_TASK_TIMEOUT_SECONDS`
+- `BOT_DEDUPE_WINDOW_SECONDS`
 
-这份说明的目标不是完整部署，而是让你能跑通最小链路。
+说明：
 
-前提：
+- 如果你的反向代理不保护 MeTube API，可以把 `METUBE_AUTH_HEADER_NAME` 和 `METUBE_AUTH_HEADER_VALUE` 留空
+- `PUBLIC_HOST_URL` 和 `PUBLIC_HOST_AUDIO_URL` 必须是 Telegram 客户端可以直接访问的公网地址
+- 代码直接读取环境变量，不会自动解析 `.env`
 
-- 你已经创建好 Telegram Bot，并拿到 `TELEGRAM_BOT_TOKEN`
-- 你知道自己的 Telegram `chat_id`
-- 远端 MeTube 已可访问
-- 如果 `/add` 和 `/history` 受保护，你已经准备好对应的鉴权头
-- `PUBLIC_HOST_URL` 和 `PUBLIC_HOST_AUDIO_URL` 指向 Telegram 可直接访问的文件链接前缀
+### 最小运行方式
 
-建议步骤：
-
-1. 复制环境变量模板并填写真实值。
+1. 复制环境变量模板：
 
 ```bash
 cp .env.example .env
 ```
 
-2. 在 shell 中加载环境变量。
+2. 填入真实值后加载环境变量：
 
 ```bash
 set -a
@@ -109,273 +144,255 @@ source .env
 set +a
 ```
 
-3. 启动 Bot。
+3. 直接启动 Bot：
 
 ```bash
 python3 -m bot.main
 ```
 
-4. 在 Telegram 中给 Bot 发送一个包含下载链接的消息。
+4. 在 Telegram 中发送一个下载链接。
 
-5. 预期行为：
-   - Bot 先回复 `Queued: <url>`
-   - 下载完成后，Bot 再回复 `Finished: <title>` 和直链
-   - 如果下载失败，Bot 会回复失败原因
+预期行为：
 
-最小公网接入建议：
+- 先收到：`Queued: <url>`
+- 下载成功后收到：`Finished: <title>` 加直链
+- 如果首次下载失败且可重试：
+  - 收到一次自动重试提示
+- 如果最终失败：
+  - 收到失败原因
 
-- 反向代理保护：
-  - `/add`
-  - `/history`
-- 公开下载路径：
-  - `/download/*`
-  - `/audio_download/*`
+### systemd 部署
 
-当前版本说明：
-
-- 这是轮询版 MVP，不是 webhook
-- 目前以单用户、单聊天为目标
-- 运行前需要你自己先把 `.env` 中的值填好
-- 如果你直接运行，会严格读取环境变量，不会自动解析 `.env` 文件
-
-### systemd 部署说明
-
-如果你已经按最小链路验证成功，可以直接用仓库内的 `systemd` 模板转为后台常驻运行。
-
-模板文件：
+仓库内已提供部署模板：
 
 - `deploy/systemd/metube-telegram-bot.service`
 
-假设你的部署目录是 `/opt/metube-telegram-proxy-bot`，并且 `.env` 已经放在这个目录下。
+当前模板假设：
 
-1. 复制 service 文件到系统目录。
+- 代码部署在 `/opt/metube-telegram-proxy-bot`
+- 环境文件在 `/opt/metube-telegram-proxy-bot/.env`
+- 直接使用系统 Python 运行 `python3 -m bot.main`
+
+部署步骤：
+
+1. 复制 service 文件：
 
 ```bash
 sudo cp deploy/systemd/metube-telegram-bot.service /etc/systemd/system/metube-telegram-bot.service
 ```
 
-2. 重载 `systemd` 配置并启动服务。
+2. 重载并启动：
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now metube-telegram-bot
 ```
 
-3. 查看服务状态。
+3. 查看状态：
 
 ```bash
 sudo systemctl status metube-telegram-bot
 ```
 
-4. 实时查看日志。
+4. 查看日志：
 
 ```bash
 sudo journalctl -u metube-telegram-bot -f
 ```
 
-说明：
+### 验证流程
 
-- 当前模板按源码方式运行，不需要先执行 `pip install .`
-- 当前模板默认以 `root` 身份运行
-- `WorkingDirectory` 固定为 `/opt/metube-telegram-proxy-bot`
-- `EnvironmentFile` 固定为 `/opt/metube-telegram-proxy-bot/.env`
-- `ExecStart` 固定为 `/usr/bin/python3 -m bot.main`
+建议按两步验证：
 
-### 致谢 / Upstream
+1. 先发一个稳定链接：
+   - 验证基础提交、下载完成、直链回传是否正常
+2. 再发一个容易受代理波动影响的链接：
+   - 验证首次失败后是否进入自动重试
+   - 验证只发送一次重试提示
+   - 验证最终成功或最终失败消息是否符合预期
 
-本项目当前基于 MeTube 代码演进而来。
+### 当前范围
 
-- Upstream: https://github.com/alexta69/metube
-- Downloader core: https://github.com/yt-dlp/yt-dlp
+当前版本的明确范围：
 
-感谢 MeTube 与 yt-dlp 社区提供的基础能力。
+- 单用户
+- 单聊天
+- 轮询模式，不是 webhook
+- 依赖已可用的远端 MeTube
+- 不处理多租户、权限分级或复杂交互命令
+
+### 后续可选优化
+
+当前主流程已经可用，后续如果继续演进，比较合理的方向是：
+
+- 增加 `/status`、`/last` 之类的查询命令
+- 将重试策略改为可配置环境变量
+- 增加更细的错误分类与日志
+- 增加 webhook 模式
+- 增加多用户或多聊天支持
+
+### Upstream
+
+本项目基于 MeTube 演进，并继续使用 `yt-dlp` 作为下载核心。
+
+- MeTube: https://github.com/alexta69/metube
+- yt-dlp: https://github.com/yt-dlp/yt-dlp
 
 ## English
 
-### Project Positioning
-
-This repository is aimed at becoming a standalone Telegram download bot:
-
-- send a media URL to Telegram
-- let the bot submit the job to a remote MeTube instance
-- let MeTube handle the actual yt-dlp download
-- return a direct download link back to Telegram after completion
-
-The project is designed for remote deployment, proxy-aware networking, and a clear separation between the Telegram bot and the download backend.
-
-### Current Status
-
-This repository is still under active development:
-
-- the current codebase is still primarily MeTube-based
-- the Telegram bot layer has not been fully implemented yet
-- this README describes the target direction of the repository, not a fully finished feature set
-
 ### Overview
 
-The goal is simple:
+This project is a standalone Telegram download bot for a single-user workflow:
 
-- avoid manually opening the MeTube web UI for every download
-- submit download jobs through Telegram
-- keep MeTube as the remote downloader and file host
-- send a direct file URL back to Telegram once the download finishes
+- send a media URL to a Telegram bot
+- let the bot submit the job to a remote MeTube instance
+- let MeTube handle the actual `yt-dlp` download
+- send a direct download URL back to Telegram after completion
 
-The MVP is intentionally scoped for a single-user, single-chat workflow.
+It is designed for deployments where:
+
+- the Telegram bot and MeTube run on different machines
+- MeTube already has the required proxy/network access
+- Telegram is used as the submission and notification channel
+
+### Verified Features
+
+The current `main` branch has been implemented and manually validated for:
+
+- Telegram message intake and URL extraction
+- single-chat allowlist control
+- remote MeTube task submission via `POST /add`
+- polling-based completion tracking via `GET /history`
+- direct public download links returned to Telegram
+- separate public prefixes for video and audio downloads
+- SQLite task persistence
+- short-window duplicate suppression
+- timeout handling and runtime logging
+- `systemd` background deployment
+- automatic retry for transient download failures
+- YouTube short-link normalization for task/history matching
+
+### Retry Behavior
+
+The verified retry behavior is:
+
+- on the first MeTube failure, the bot sends one retry notice:
+  - `Failed once, retrying automatically (1/5): ...`
+- it retries up to 5 times with fixed backoff:
+  - `30 / 60 / 120 / 300 / 600` seconds
+- it does not spam Telegram with one message per retry
+- after a successful re-submit, it clears the stale failed MeTube history entry
+- it only sends a final failure message after the retry budget is exhausted
 
 ### Architecture
 
-The system boundary is:
+System flow:
 
-1. Telegram Bot and MeTube are deployed on different machines.
-2. The bot receives Telegram messages, extracts URLs, calls the MeTube API, polls job status, and sends replies.
-3. MeTube handles yt-dlp downloads, file storage, history, and static file exposure.
-4. A reverse proxy protects API routes such as `/add` and `/history`, while keeping `/download/*` and `/audio_download/*` publicly accessible so Telegram links can be opened directly.
+1. Telegram Bot receives the message and extracts URLs.
+2. The bot submits the job to remote MeTube.
+3. MeTube performs the `yt-dlp` download and stores files.
+4. The bot polls MeTube history for task state changes.
+5. The bot sends a direct downloadable URL back to Telegram.
 
-Target flow:
+Data flow:
 
 `Telegram -> Bot -> MeTube API -> yt-dlp download -> public file URL -> Telegram`
 
-### Roadmap
-
-- [x] Repository initialization and GitHub publishing
-- [x] Project direction and architecture design
-- [x] README repositioning
-- [ ] Telegram bot MVP
-- [ ] MeTube API client wrapper
-- [ ] SQLite task persistence
-- [ ] Polling-based completion tracking and notifications
-- [ ] Public download link and protected API split
-- [ ] Deployment documentation
-
-### Repository Notes
-
-At this stage, the repository contains:
-
-- the MeTube codebase
-- the Telegram bot design document
-- an `.env.example` file for end-to-end configuration
-- an initial bot MVP skeleton under `bot/`
-- unit tests for config loading, URL parsing, persistence, MeTube API calls, Telegram API calls, and service orchestration
-
-Design document:
-
-- `docs/superpowers/specs/2026-03-25-telegram-bot-metube-design.md`
-
-Environment example:
-
-- `.env.example`
-
-Until the Telegram bot implementation lands, refer to the upstream MeTube project for backend runtime details.
-
-### Minimal Run Guide
-
-This is not a full deployment guide. It is the shortest path to run the current MVP flow end to end.
-
-Prerequisites:
-
-- you already created a Telegram bot and have a real `TELEGRAM_BOT_TOKEN`
-- you know your Telegram `chat_id`
-- your remote MeTube instance is reachable
-- if `/add` and `/history` are protected, you already have the required auth header pair
-- `PUBLIC_HOST_URL` and `PUBLIC_HOST_AUDIO_URL` point to direct file URLs reachable from Telegram
-
-Suggested steps:
-
-1. Copy the example environment file and fill in real values.
-
-```bash
-cp .env.example .env
-```
-
-2. Load the environment variables into your shell.
-
-```bash
-set -a
-source .env
-set +a
-```
-
-3. Start the bot.
-
-```bash
-python3 -m bot.main
-```
-
-4. Send a message containing a media URL to your Telegram bot.
-
-Expected behavior:
-
-- the bot first replies with `Queued: <url>`
-- after completion, it replies with `Finished: <title>` and a direct download URL
-- if the download fails, it replies with the failure reason
-
-Minimal public routing recommendation:
+Recommended public routing:
 
 - protect:
   - `/add`
   - `/history`
+  - `/delete`
 - expose publicly:
   - `/download/*`
   - `/audio_download/*`
 
-Current limitations:
+### Environment
 
-- this is a polling-based MVP, not a webhook-based bot
-- it is currently scoped for a single user and a single chat
-- you must fill in `.env` yourself before running
+Example file:
+
+- `.env.example`
+
+Key variables:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_CHAT_ID`
+- `METUBE_BASE_URL`
+- `METUBE_AUTH_HEADER_NAME`
+- `METUBE_AUTH_HEADER_VALUE`
+- `PUBLIC_HOST_URL`
+- `PUBLIC_HOST_AUDIO_URL`
+- `BOT_SQLITE_PATH`
+- `BOT_HTTP_TIMEOUT_SECONDS`
+- `BOT_POLL_INTERVAL_SECONDS`
+- `BOT_TASK_TIMEOUT_SECONDS`
+- `BOT_DEDUPE_WINDOW_SECONDS`
+
+Notes:
+
+- leave the MeTube auth header pair empty if your reverse proxy does not protect the API
+- `PUBLIC_HOST_URL` and `PUBLIC_HOST_AUDIO_URL` must be directly reachable from the Telegram client
 - the code reads environment variables directly and does not auto-load `.env`
 
-### systemd Deployment
+### Minimal Run
 
-If the minimal end-to-end flow already works, you can switch the bot to a background `systemd` service using the template in this repository.
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+python3 -m bot.main
+```
+
+Expected behavior:
+
+- first reply: `Queued: <url>`
+- on success: `Finished: <title>` plus a direct download URL
+- on first retryable failure: one retry notice
+- on final failure: a failure message with the last known reason
+
+### systemd Deployment
 
 Template file:
 
 - `deploy/systemd/metube-telegram-bot.service`
 
-Assumptions:
+The current template assumes:
 
-- the repository is deployed at `/opt/metube-telegram-proxy-bot`
-- your `.env` file already exists at `/opt/metube-telegram-proxy-bot/.env`
+- repository path: `/opt/metube-telegram-proxy-bot`
+- env file path: `/opt/metube-telegram-proxy-bot/.env`
+- runtime entrypoint: `/usr/bin/python3 -m bot.main`
 
-1. Copy the service file into the systemd directory.
+Deploy:
 
 ```bash
 sudo cp deploy/systemd/metube-telegram-bot.service /etc/systemd/system/metube-telegram-bot.service
-```
-
-2. Reload `systemd` and start the service.
-
-```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now metube-telegram-bot
-```
-
-3. Check service status.
-
-```bash
 sudo systemctl status metube-telegram-bot
-```
-
-4. Follow logs in real time.
-
-```bash
 sudo journalctl -u metube-telegram-bot -f
 ```
 
-Notes:
+### Scope and Limits
 
-- the current template runs directly from source, so `pip install .` is not required
-- the current template runs as `root`
-- `WorkingDirectory` is fixed to `/opt/metube-telegram-proxy-bot`
-- `EnvironmentFile` is fixed to `/opt/metube-telegram-proxy-bot/.env`
-- `ExecStart` is fixed to `/usr/bin/python3 -m bot.main`
+Current scope:
 
-### Credits / Upstream
+- single user
+- single chat
+- polling-based bot, not webhook-based
+- requires an already working remote MeTube instance
+- not a multi-tenant platform
 
-This project currently evolves from the MeTube codebase.
+### Possible Next Improvements
 
-- Upstream: https://github.com/alexta69/metube
-- Downloader core: https://github.com/yt-dlp/yt-dlp
+- add `/status` or recent-task query commands
+- make retry policy configurable via environment variables
+- improve error classification and operational logs
+- support webhook mode
+- extend beyond single-user deployment
 
-Thanks to the MeTube and yt-dlp communities for the foundation.
+### Upstream
+
+- MeTube: https://github.com/alexta69/metube
+- yt-dlp: https://github.com/yt-dlp/yt-dlp
