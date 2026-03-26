@@ -154,23 +154,26 @@ def build_proxy_runtime(
     start_xray: Callable[[str], None] | None = None,
     restart_xray: Callable[[str], None] | None = None,
     time_fn: Callable[[], float] | None = None,
-    xray_config_path: str | Path = "/etc/xray/config.json",
+    xray_config_path: str | Path | None = None,
 ):
     subscription_url = environ.get("VPN_SUBSCRIPTION_URL")
     if not subscription_url:
         return None
 
+    state_dir_path = Path(state_dir)
+    resolved_xray_config_path = Path(xray_config_path) if xray_config_path is not None else state_dir_path / "xray-config.json"
+
     if subscription_loader is None:
         subscription_loader = lambda: vpn.fetch_subscription(subscription_url)
 
     if start_xray is None or restart_xray is None:
-        controller = _build_default_xray_controller(Path(xray_config_path))
+        controller = _build_default_xray_controller(resolved_xray_config_path)
         start_xray = start_xray or controller["start"]
         restart_xray = restart_xray or controller["restart"]
 
     return ProxyRuntimeManager(
-        state_path=Path(state_dir) / "proxy_state.json",
-        xray_config_path=xray_config_path,
+        state_path=state_dir_path / "proxy_state.json",
+        xray_config_path=resolved_xray_config_path,
         subscription_loader=subscription_loader,
         start_xray=start_xray,
         restart_xray=restart_xray,

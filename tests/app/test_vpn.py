@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import MagicMock, Mock, patch
 
 
 APP_DIR = Path(__file__).resolve().parents[2] / "app"
@@ -88,6 +89,44 @@ class ParseSubscriptionNodesTests(unittest.TestCase):
         nodes = vpn.parse_subscription_nodes(raw_subscription)
 
         self.assertEqual(len(nodes), 2)
+
+
+class FetchSubscriptionTests(unittest.TestCase):
+    def test_fetch_subscription_bypasses_process_proxy_environment(self) -> None:
+        response = Mock()
+        response.read.return_value = b"subscription-data"
+
+        context_manager = MagicMock()
+        context_manager.__enter__.return_value = response
+
+        opener = Mock()
+        opener.open.return_value = context_manager
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "http_proxy": "http://127.0.0.1:10809",
+                    "https_proxy": "http://127.0.0.1:10809",
+                },
+                clear=False,
+            ),
+            patch("vpn.urllib.request.ProxyHandler", return_value="no-proxy-handler") as proxy_handler,
+            patch("vpn.urllib.request.build_opener", return_value=opener) as build_opener,
+            patch("vpn.urllib.request.urlopen") as urlopen,
+        ):
+            urlopen.return_value.__enter__.return_value.read.return_value = b"subscription-data"
+
+            result = vpn.fetch_subscription("https://example.com/subscription")
+
+        self.assertEqual(result, "subscription-data")
+        proxy_handler.assert_called_once_with({})
+        build_opener.assert_called_once_with("no-proxy-handler")
+        opener.open.assert_called_once()
+        request_arg = opener.open.call_args.args[0]
+        self.assertIsInstance(request_arg, vpn.urllib.request.Request)
+        self.assertEqual(request_arg.full_url, "https://example.com/subscription")
+        urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -174,7 +174,7 @@ class BuildProxyRuntimeTests(unittest.TestCase):
 
             self.assertIsInstance(manager, ProxyRuntimeManager)
             self.assertEqual(manager.state_path, Path(tmp) / "proxy_state.json")
-            self.assertEqual(manager.xray_config_path, Path("/etc/xray/config.json"))
+            self.assertEqual(manager.xray_config_path, Path(tmp) / "xray-config.json")
 
 
 if __name__ == "__main__":

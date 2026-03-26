@@ -23,7 +23,10 @@ def fetch_subscription(url):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        # Subscription fetches must stay direct so startup and node refresh do not
+        # depend on the currently configured local proxy state.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=30) as response:
             return response.read().decode('utf-8').strip()
     except Exception as e:
         logger.error(f"Failed to fetch subscription: {e}")
