@@ -56,7 +56,11 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
 
     telegram_allowed_chat_id: int | None = None
     if env.get("TELEGRAM_ALLOWED_CHAT_ID"):
-        telegram_allowed_chat_id = int(env["TELEGRAM_ALLOWED_CHAT_ID"])
+        try:
+            telegram_allowed_chat_id = int(env["TELEGRAM_ALLOWED_CHAT_ID"])
+        except ValueError:
+            if not telegram_allowed_user_ids:
+                raise
 
     public_download_base_url = (env.get("PUBLIC_DOWNLOAD_BASE_URL") or "").rstrip("/") or None
     metube_base_url = (env.get("METUBE_BASE_URL") or "").rstrip("/") or None

@@ -174,6 +174,19 @@ class LoadConfigTests(TestCase):
         self.assertEqual(config.telegram_allowed_user_ids, (101, 202, 303))
         self.assertIsNone(config.telegram_allowed_chat_id)
 
+    def test_load_config_user_list_mode_takes_precedence_over_invalid_chat_id(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_CHAT_ID": "not-an-int",
+                "TELEGRAM_ALLOWED_USER_IDS": "101, 202 ,303",
+                "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download",
+            }
+        )
+
+        self.assertEqual(config.telegram_allowed_user_ids, (101, 202, 303))
+        self.assertIsNone(config.telegram_allowed_chat_id)
+
     def test_load_config_rejects_invalid_telegram_allowed_user_ids_items(self):
         for raw_user_ids in ("abc", "1,,2", "   "):
             with self.subTest(raw_user_ids=raw_user_ids):
