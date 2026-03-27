@@ -49,6 +49,8 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
             public_download_base_url="https://downloads.example.com/download",
             task_timeout_seconds=600,
             poll_interval_seconds=1.0,
+            cookies_file=None,
+            ytdlp_extra_args=(),
         )
 
     async def test_run_one_task_marks_successful_download_finished(self):
@@ -91,6 +93,50 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
                 "https://downloads.example.com/download/movie.mp4",
             )
             self.assertEqual(task.finished_at, 100.0)
+
+    async def test_run_one_task_passes_runtime_parity_inputs_to_download_runner(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            config.cookies_file = "/run/secrets/cookies.txt"
+            config.ytdlp_extra_args = ("--format", "bv*+ba/b")
+            store = TaskStore(root / "tasks.sqlite3")
+            store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://video.example/watch",
+            )
+            runner = FakeDownloadRunner(
+                [
+                    DownloadResult(
+                        ok=True,
+                        title="Movie",
+                        filename="movie.mp4",
+                        error_text=None,
+                    )
+                ]
+            )
+            worker = DownloadWorker(
+                config=config,
+                store=store,
+                download_runner=runner,
+                proxy_runtime=FakeProxyRuntime(),
+                time_fn=lambda: 100.0,
+            )
+
+            await worker.run_one_task()
+
+            self.assertEqual(
+                runner.calls[0],
+                {
+                    "source_url": "https://video.example/watch",
+                    "download_dir": str(root / "downloads"),
+                    "proxy_url": "http://127.0.0.1:10809",
+                    "cookies_file": "/run/secrets/cookies.txt",
+                    "extra_args": ("--format", "bv*+ba/b"),
+                    "timeout_seconds": 600,
+                },
+            )
 
     async def test_run_one_task_retries_transient_failure_on_same_node(self):
         with TemporaryDirectory() as tmp:

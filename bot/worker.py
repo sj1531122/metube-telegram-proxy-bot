@@ -69,6 +69,8 @@ class DownloadWorker:
             source_url=task.source_url,
             download_dir=self.config.download_dir,
             proxy_url=self._proxy_url(),
+            cookies_file=self.config.cookies_file,
+            extra_args=self.config.ytdlp_extra_args,
             timeout_seconds=self.config.task_timeout_seconds,
         )
 
