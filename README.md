@@ -28,6 +28,32 @@ Verified production flow:
 
 If proxy runtime is enabled, the worker can automatically switch proxy nodes and retry when it hits invalid nodes, network failures, or YouTube-style rate-limit / anti-bot errors.
 
+## Latest Verified Status (2026-03-27)
+
+As of 2026-03-27, `main` includes the runtime-parity hardening that was added after real Telegram and YouTube verification.
+
+Shipped in `main`:
+
+- Docker image now bundles `Deno 2.6.6`
+- lockfile now pins `yt-dlp 2026.3.17` and `yt-dlp-ejs 0.8.0`
+- optional `COOKIES_FILE` and `YTDLP_EXTRA_ARGS` are supported
+- every `yt-dlp` execution forces `--no-playlist`
+- Telegram `getUpdates` now uses a request timeout above the long-poll timeout, avoiding self-inflicted polling timeouts
+- proxy failover now treats partial-read download failures such as `... more expected` as switch-node errors instead of immediate final failures
+
+Verified results:
+
+- full Python `unittest` suite passes on `main`
+- Docker rebuild passes
+- local Telegram end-to-end verification passes
+- second-server deployment verification passes
+- a real YouTube task was observed failing on one proxy node, switching to the next node, and then finishing successfully
+
+Operational note:
+
+- proxy-free hosts can use the default `docker compose` deployment in this repository
+- hosts that must egress through a loopback-only local proxy may need explicit proxy environment wiring or a host-network deployment strategy
+
 ## What This Project Includes
 
 - Telegram polling bot
