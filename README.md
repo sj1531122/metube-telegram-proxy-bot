@@ -119,8 +119,8 @@ Required:
 
 Allowlist configuration (at least one required):
 
-- `TELEGRAM_ALLOWED_USER_IDS` (preferred multi-user private-chat allowlist; when set, only those user IDs may queue downloads via private chat and group chats are ignored)
-- `TELEGRAM_ALLOWED_CHAT_ID` (legacy single-chat compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset)
+- `TELEGRAM_ALLOWED_USER_IDS` (preferred multi-user private-chat allowlist; while this list is configured, only those user IDs may queue downloads via private chat and group chats are ignored)
+- `TELEGRAM_ALLOWED_CHAT_ID` (legacy single-chat compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out—leaving it present, even empty, keeps the multi-user allowlist active)
 
 Optional:
 
@@ -144,12 +144,12 @@ Variable notes:
 
 - `TELEGRAM_ALLOWED_USER_IDS`
   - comma-separated list of the Telegram user IDs that may queue downloads via private chat
-  - only direct messages from those users are processed; group chats are ignored even if a configured user participates
+  - when this list is configured (multi-user private mode), only direct messages from those users are processed and group chats are ignored even if a configured user participates
   - dedupe state is tracked per user, so each allowed user can queue the same normalized URL independently while `BOT_DEDUPE_WINDOW_SECONDS` still suppresses immediate repeats
-  - this setting takes precedence over `TELEGRAM_ALLOWED_CHAT_ID` when both are set
+  - this setting takes precedence; legacy single-chat behavior requires removing or commenting out this line entirely
 - `TELEGRAM_ALLOWED_CHAT_ID`
-  - legacy compatibility for single-chat deployments; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset
-  - fallback preserves the original single allowed chat behavior for compatibility with older deployments
+  - legacy compatibility for single-chat deployments; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out (leaving it present, even empty, keeps the multi-user allowlist active)
+  - fallback preserves the original single allowed chat behavior, including any group-chat semantics of that chat when it is a group
 - `PUBLIC_DOWNLOAD_BASE_URL`
   - must be the final public URL prefix visible to Telegram clients
   - example: `https://downloads.example.com/download`
@@ -206,7 +206,7 @@ PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 VPN_SUBSCRIPTION_URL=https://example.com/subscription
 ```
 
-Only direct private messages from those user IDs are processed; group chats are ignored even if a configured user participates.
+While `TELEGRAM_ALLOWED_USER_IDS` is configured (multi-user mode), only direct private messages from those user IDs are processed and group chats are ignored even if a configured user participates; to fall back to the legacy allowed chat, remove or comment out this variable, set `TELEGRAM_ALLOWED_CHAT_ID`, and send from that chat.
 
 4. Optional: enable cookies support by mounting a Netscape `cookies.txt` file.
 
@@ -288,7 +288,8 @@ PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 
 Task behavior:
 
-- only private chats from the user IDs listed in `TELEGRAM_ALLOWED_USER_IDS` can queue tasks; group chats are ignored, and when that list is unset the legacy `TELEGRAM_ALLOWED_CHAT_ID` single-chat fallback is used
+- when `TELEGRAM_ALLOWED_USER_IDS` is configured, only private chats from the listed user IDs can queue tasks and group chats are ignored even if a configured user participates
+- when that list is unset and `TELEGRAM_ALLOWED_CHAT_ID` is configured, legacy single-chat mode resumes and only the allowed chat can queue tasks
 - each incoming message may contain one or more URLs
 - URLs are normalized before de-duplication and storage
 - only one queued task is processed at a time
