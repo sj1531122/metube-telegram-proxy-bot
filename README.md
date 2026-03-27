@@ -77,7 +77,7 @@ Operational note:
 - MeTube API as the active download backend
 - separate audio download URL path
 - webhook mode
-- group chats (these are ignored even in multi-user mode)
+- group-chat support in multi-user allowlist mode
 - playlist downloads
 
 ## Architecture
@@ -120,7 +120,7 @@ Required:
 Allowlist configuration (at least one required):
 
 - `TELEGRAM_ALLOWED_USER_IDS` (preferred multi-user private-chat allowlist; while this list is configured, only those user IDs may queue downloads via private chat and group chats are ignored)
-- `TELEGRAM_ALLOWED_CHAT_ID` (legacy single-chat compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out—leaving it present, even empty, keeps the multi-user allowlist active)
+- `TELEGRAM_ALLOWED_CHAT_ID` (legacy single-chat compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out—setting the user-ID variable to an empty value is invalid and does not trigger fallback)
 
 Optional:
 
@@ -146,9 +146,9 @@ Variable notes:
   - comma-separated list of the Telegram user IDs that may queue downloads via private chat
   - when this list is configured (multi-user private mode), only direct messages from those users are processed and group chats are ignored even if a configured user participates
   - dedupe state is tracked per user, so each allowed user can queue the same normalized URL independently while `BOT_DEDUPE_WINDOW_SECONDS` still suppresses immediate repeats
-  - this setting takes precedence; legacy single-chat behavior requires removing or commenting out this line entirely
+  - this setting takes precedence; legacy single-chat behavior requires removing or commenting out this line entirely (setting it to an empty value is invalid and does not trigger fallback)
 - `TELEGRAM_ALLOWED_CHAT_ID`
-  - legacy compatibility for single-chat deployments; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out (leaving it present, even empty, keeps the multi-user allowlist active)
+  - legacy compatibility for single-chat deployments; honored only when `TELEGRAM_ALLOWED_USER_IDS` is removed or commented out (setting the user-ID line to an empty value is invalid and does not trigger fallback)
   - fallback preserves the original single allowed chat behavior, including any group-chat semantics of that chat when it is a group
 - `PUBLIC_DOWNLOAD_BASE_URL`
   - must be the final public URL prefix visible to Telegram clients
