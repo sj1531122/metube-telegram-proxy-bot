@@ -11,7 +11,7 @@ This repository no longer depends on MeTube as the runtime download backend.
 Current `main` is designed for one practical deployment target:
 
 - one bot
-- one allowed chat
+- multiple allowed private users (private direct messages only)
 - one serial download worker
 - one public download path: `/download/*`
 - single-video downloads only
@@ -57,7 +57,7 @@ Operational note:
 ## What This Project Includes
 
 - Telegram polling bot
-- single-user and single-chat allowlist control
+- multi-user allowlist control that accepts only private chats from configured users and keeps dedupe scoped per user
 - SQLite task persistence under `data/state`
 - one serial worker, no concurrent downloads
 - embedded HTTP file server on container port `8081`
@@ -77,7 +77,7 @@ Operational note:
 - MeTube API as the active download backend
 - separate audio download URL path
 - webhook mode
-- multi-user or multi-chat isolation
+- group chats (these are ignored even in multi-user mode)
 - playlist downloads
 
 ## Architecture
@@ -115,11 +115,12 @@ The default compose file mounts both directories from the host, so downloads and
 Required:
 
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_CHAT_ID`
+- `TELEGRAM_ALLOWED_USER_IDS`
 - `PUBLIC_DOWNLOAD_BASE_URL`
 
 Optional:
 
+- `TELEGRAM_ALLOWED_CHAT_ID` (legacy compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset)
 - `VPN_SUBSCRIPTION_URL`
 - `DOWNLOAD_DIR`
 - `STATE_DIR`
@@ -138,6 +139,14 @@ Example file:
 
 Variable notes:
 
+- `TELEGRAM_ALLOWED_USER_IDS`
+  - comma-separated list of the Telegram user IDs that may queue downloads via private chat
+  - only direct messages from those users are processed; group chats are ignored even if a configured user participates
+  - dedupe state is tracked per user, so each allowed user can queue the same normalized URL independently while `BOT_DEDUPE_WINDOW_SECONDS` still suppresses immediate repeats
+  - this setting takes precedence over `TELEGRAM_ALLOWED_CHAT_ID` when both are set
+- `TELEGRAM_ALLOWED_CHAT_ID`
+  - legacy compatibility for single-chat deployments; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset
+  - fallback preserves the original single allowed chat behavior for compatibility with older deployments
 - `PUBLIC_DOWNLOAD_BASE_URL`
   - must be the final public URL prefix visible to Telegram clients
   - example: `https://downloads.example.com/download`
@@ -189,10 +198,12 @@ cp .env.example .env
 
 ```env
 TELEGRAM_BOT_TOKEN=1234567890:replace-me
-TELEGRAM_ALLOWED_CHAT_ID=123456789
+TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
 PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 VPN_SUBSCRIPTION_URL=https://example.com/subscription
 ```
+
+Only direct private messages from those user IDs are processed; group chats are ignored even if a configured user participates.
 
 4. Optional: enable cookies support by mounting a Netscape `cookies.txt` file.
 
