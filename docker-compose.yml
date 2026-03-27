@@ -17,3 +17,6 @@ services:
     volumes:
       - ./data/downloads:/downloads
       - ./data/state:/state
+      # Optional: mount a Netscape cookies.txt file and set
+      # COOKIES_FILE=/run/secrets/cookies.txt in .env to enable it.
+      # - ./secrets/cookies.txt:/run/secrets/cookies.txt:ro

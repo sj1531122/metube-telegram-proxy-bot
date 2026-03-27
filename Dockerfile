@@ -1,5 +1,7 @@
 FROM python:3.13-slim
 
+ARG DENO_VERSION=2.0.0
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
@@ -23,6 +25,12 @@ RUN XRAY_TAG="$(curl -Ls -o /dev/null -w '%{url_effective}' https://github.com/X
     mv /tmp/xray/*.dat /usr/local/bin/ && \
     rm -rf /tmp/xray /tmp/xray.zip && \
     chmod +x /usr/local/bin/xray
+
+RUN curl -L -o /tmp/deno.zip \
+      "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+    unzip -q /tmp/deno.zip -d /usr/local/bin && \
+    chmod +x /usr/local/bin/deno && \
+    rm -f /tmp/deno.zip
 
 COPY app ./app
 COPY bot ./bot
