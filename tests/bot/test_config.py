@@ -148,3 +148,52 @@ class LoadConfigTests(TestCase):
                     "COOKIES_FILE": "/run/secrets/missing-cookies.txt",
                 }
             )
+
+    def test_load_config_parses_telegram_allowed_user_ids(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                "TELEGRAM_ALLOWED_USER_IDS": "101, 202 ,303",
+                "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download",
+            }
+        )
+
+        self.assertEqual(config.telegram_allowed_user_ids, (101, 202, 303))
+        self.assertEqual(config.telegram_allowed_chat_id, 42)
+
+    def test_load_config_allows_user_list_mode_without_chat_id(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_USER_IDS": "101, 202 ,303",
+                "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download",
+            }
+        )
+
+        self.assertEqual(config.telegram_allowed_user_ids, (101, 202, 303))
+        self.assertIsNone(config.telegram_allowed_chat_id)
+
+    def test_load_config_rejects_invalid_telegram_allowed_user_ids_items(self):
+        for raw_user_ids in ("abc", "1,,2", "   "):
+            with self.subTest(raw_user_ids=raw_user_ids):
+                with self.assertRaises(ValueError):
+                    load_config(
+                        {
+                            "TELEGRAM_BOT_TOKEN": "token",
+                            "TELEGRAM_ALLOWED_USER_IDS": raw_user_ids,
+                            "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download",
+                        }
+                    )
+
+    def test_load_config_supports_legacy_telegram_allowed_chat_id_mode(self):
+        config = load_config(
+            {
+                "TELEGRAM_BOT_TOKEN": "token",
+                "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download",
+            }
+        )
+
+        self.assertEqual(config.telegram_allowed_chat_id, 42)
+        self.assertEqual(config.telegram_allowed_user_ids, ())

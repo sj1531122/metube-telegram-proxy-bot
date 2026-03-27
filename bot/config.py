@@ -9,7 +9,8 @@ from typing import Mapping
 @dataclass(slots=True)
 class BotConfig:
     telegram_bot_token: str
-    telegram_allowed_chat_id: int
+    telegram_allowed_chat_id: int | None = None
+    telegram_allowed_user_ids: tuple[int, ...] = ()
     metube_base_url: str | None = None
     metube_auth_header_name: str | None = None
     metube_auth_header_value: str | None = None
@@ -30,14 +31,32 @@ class BotConfig:
 
 
 def load_config(env: Mapping[str, str]) -> BotConfig:
-    missing = [
-        key
-        for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID")
-        if not env.get(key)
-    ]
+    user_ids_value = env.get("TELEGRAM_ALLOWED_USER_IDS")
+    telegram_allowed_user_ids: tuple[int, ...] = ()
+    if user_ids_value is not None:
+        parsed_user_ids: list[int] = []
+        for raw_item in user_ids_value.split(","):
+            item = raw_item.strip()
+            if not item:
+                raise ValueError("TELEGRAM_ALLOWED_USER_IDS must contain only integers")
+            try:
+                parsed_user_ids.append(int(item))
+            except ValueError as exc:
+                raise ValueError("TELEGRAM_ALLOWED_USER_IDS must contain only integers") from exc
+        telegram_allowed_user_ids = tuple(parsed_user_ids)
+
+    missing = []
+    if not env.get("TELEGRAM_BOT_TOKEN"):
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not telegram_allowed_user_ids and not env.get("TELEGRAM_ALLOWED_CHAT_ID"):
+        missing.append("TELEGRAM_ALLOWED_CHAT_ID")
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Missing required environment variables: {joined}")
+
+    telegram_allowed_chat_id: int | None = None
+    if env.get("TELEGRAM_ALLOWED_CHAT_ID"):
+        telegram_allowed_chat_id = int(env["TELEGRAM_ALLOWED_CHAT_ID"])
 
     public_download_base_url = (env.get("PUBLIC_DOWNLOAD_BASE_URL") or "").rstrip("/") or None
     metube_base_url = (env.get("METUBE_BASE_URL") or "").rstrip("/") or None
@@ -105,7 +124,8 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
 
     return BotConfig(
         telegram_bot_token=env["TELEGRAM_BOT_TOKEN"],
-        telegram_allowed_chat_id=int(env["TELEGRAM_ALLOWED_CHAT_ID"]),
+        telegram_allowed_chat_id=telegram_allowed_chat_id,
+        telegram_allowed_user_ids=telegram_allowed_user_ids,
         metube_base_url=metube_base_url,
         metube_auth_header_name=auth_header_name,
         metube_auth_header_value=auth_header_value,
