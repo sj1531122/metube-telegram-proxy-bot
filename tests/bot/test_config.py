@@ -1,3 +1,5 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from bot.config import BotConfig, load_config
@@ -111,3 +113,38 @@ class LoadConfigTests(TestCase):
         self.assertEqual(config.http_timeout_seconds, 45)
         self.assertEqual(config.poll_interval_seconds, 2.5)
         self.assertEqual(config.task_timeout_seconds, 900)
+        self.assertIsNone(config.cookies_file)
+        self.assertEqual(config.ytdlp_extra_args, ())
+
+    def test_load_config_parses_runtime_parity_settings(self):
+        with TemporaryDirectory() as temp_dir:
+            cookies_file = Path(temp_dir) / "cookies.txt"
+            cookies_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+            config = load_config(
+                {
+                    "TELEGRAM_BOT_TOKEN": "token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                    "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download/",
+                    "COOKIES_FILE": str(cookies_file),
+                    "YTDLP_EXTRA_ARGS": "--format bv*+ba/b --referer https://example.com",
+                }
+            )
+
+        self.assertEqual(config.public_download_base_url, "https://downloads.example.com/download")
+        self.assertEqual(config.cookies_file, str(cookies_file))
+        self.assertEqual(
+            config.ytdlp_extra_args,
+            ("--format", "bv*+ba/b", "--referer", "https://example.com"),
+        )
+
+    def test_load_config_rejects_missing_cookies_file(self):
+        with self.assertRaises(ValueError):
+            load_config(
+                {
+                    "TELEGRAM_BOT_TOKEN": "token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "42",
+                    "PUBLIC_DOWNLOAD_BASE_URL": "https://downloads.example.com/download/",
+                    "COOKIES_FILE": "/run/secrets/missing-cookies.txt",
+                }
+            )

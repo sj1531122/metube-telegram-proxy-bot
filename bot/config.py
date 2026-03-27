@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shlex
 from typing import Mapping
 
 
@@ -24,6 +25,8 @@ class BotConfig:
     state_dir: str = "bot"
     http_bind: str = "0.0.0.0"
     http_port: int = 8081
+    cookies_file: str | None = None
+    ytdlp_extra_args: tuple[str, ...] = ()
 
 
 def load_config(env: Mapping[str, str]) -> BotConfig:
@@ -77,6 +80,15 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
     dedupe_window_seconds = int(env.get("BOT_DEDUPE_WINDOW_SECONDS", "300"))
     http_port = int(env.get("HTTP_PORT", "8081"))
     http_bind = env.get("HTTP_BIND", "0.0.0.0")
+    cookies_file = (env.get("COOKIES_FILE") or "").strip() or None
+    if cookies_file and not Path(cookies_file).is_file():
+        raise ValueError("COOKIES_FILE must point to an existing file")
+
+    ytdlp_extra_args_value = (env.get("YTDLP_EXTRA_ARGS") or "").strip()
+    try:
+        ytdlp_extra_args = tuple(shlex.split(ytdlp_extra_args_value))
+    except ValueError as exc:
+        raise ValueError("YTDLP_EXTRA_ARGS could not be parsed") from exc
 
     if http_timeout_seconds <= 0:
         raise ValueError("HTTP_TIMEOUT_SECONDS must be greater than 0")
@@ -109,4 +121,6 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
         state_dir=state_dir,
         http_bind=http_bind,
         http_port=http_port,
+        cookies_file=cookies_file,
+        ytdlp_extra_args=ytdlp_extra_args,
     )
