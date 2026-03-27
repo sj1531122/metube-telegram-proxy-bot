@@ -19,6 +19,8 @@ async def run_download(
     source_url: str,
     download_dir: str | Path,
     proxy_url: str | None = None,
+    cookies_file: str | None = None,
+    extra_args: tuple[str, ...] = (),
     timeout_seconds: float,
     process_factory=asyncio.create_subprocess_exec,
 ) -> DownloadResult:
@@ -27,6 +29,7 @@ async def run_download(
         "yt-dlp",
         "--no-progress",
         "--newline",
+        "--no-playlist",
         "--print",
         "before_dl:TITLE:%(title)s",
         "--print",
@@ -36,8 +39,11 @@ async def run_download(
         "-o",
         "%(title)s.%(ext)s",
     ]
+    if cookies_file:
+        command.extend(["--cookies", cookies_file])
     if proxy_url:
         command.extend(["--proxy", proxy_url])
+    command.extend(extra_args)
     command.append(source_url)
 
     process = await process_factory(

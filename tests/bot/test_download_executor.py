@@ -87,6 +87,65 @@ class RunDownloadTests(IsolatedAsyncioTestCase):
             proxy_index = command.index("--proxy")
             self.assertEqual(command[proxy_index + 1], "http://127.0.0.1:10809")
 
+    async def test_run_download_forces_single_video_mode(self):
+        with TemporaryDirectory() as tmp:
+            download_dir = Path(tmp) / "downloads"
+            download_dir.mkdir()
+            calls = []
+
+            async def fake_process_factory(*args, **kwargs):
+                calls.append((args, kwargs))
+                return FakeProcess(returncode=0)
+
+            await run_download(
+                source_url="https://video.example/watch",
+                download_dir=download_dir,
+                timeout_seconds=30,
+                process_factory=fake_process_factory,
+            )
+
+            command = list(calls[0][0])
+            self.assertIn("--no-playlist", command)
+            self.assertEqual(command[-1], "https://video.example/watch")
+
+    async def test_run_download_adds_optional_cookies_and_extra_args_before_url(self):
+        with TemporaryDirectory() as tmp:
+            download_dir = Path(tmp) / "downloads"
+            download_dir.mkdir()
+            final_file = download_dir / "movie.mp4"
+            final_file.write_bytes(b"video")
+            calls = []
+
+            async def fake_process_factory(*args, **kwargs):
+                calls.append((args, kwargs))
+                return FakeProcess(
+                    stdout=f"TITLE:Movie\nFILEPATH:{final_file}\n",
+                    returncode=0,
+                )
+
+            await run_download(
+                source_url="https://video.example/watch",
+                download_dir=download_dir,
+                proxy_url="http://127.0.0.1:10809",
+                cookies_file="/run/secrets/cookies.txt",
+                extra_args=("--format", "bv*+ba/b", "--referer", "https://example.com"),
+                timeout_seconds=30,
+                process_factory=fake_process_factory,
+            )
+
+            command = list(calls[0][0])
+            cookies_index = command.index("--cookies")
+            proxy_index = command.index("--proxy")
+            url_index = command.index("https://video.example/watch")
+
+            self.assertEqual(command[cookies_index + 1], "/run/secrets/cookies.txt")
+            self.assertEqual(command[proxy_index + 1], "http://127.0.0.1:10809")
+            self.assertEqual(
+                command[url_index - 4:url_index],
+                ["--format", "bv*+ba/b", "--referer", "https://example.com"],
+            )
+            self.assertEqual(command[-1], "https://video.example/watch")
+
     async def test_run_download_returns_stderr_text_for_failed_process(self):
         with TemporaryDirectory() as tmp:
             download_dir = Path(tmp) / "downloads"
