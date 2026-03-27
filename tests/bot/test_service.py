@@ -22,10 +22,17 @@ class FakeTelegramApi:
 
 
 class BotServiceTests(IsolatedAsyncioTestCase):
-    def make_config(self, db_path: Path) -> BotConfig:
+    def make_config(
+        self,
+        db_path: Path,
+        *,
+        telegram_allowed_chat_id: int | None = 42,
+        telegram_allowed_user_ids: tuple[int, ...] = (),
+    ) -> BotConfig:
         return BotConfig(
             telegram_bot_token="token",
-            telegram_allowed_chat_id=42,
+            telegram_allowed_chat_id=telegram_allowed_chat_id,
+            telegram_allowed_user_ids=telegram_allowed_user_ids,
             sqlite_path=str(db_path),
             public_download_base_url="https://downloads.example.com/download",
             download_dir="downloads",
@@ -138,6 +145,174 @@ class BotServiceTests(IsolatedAsyncioTestCase):
 
             self.assertEqual(store.list_unfinished_tasks(), [])
             self.assertEqual(telegram.messages, [])
+
+    async def test_handle_update_private_mode_queues_authorized_private_user(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path, telegram_allowed_user_ids=(101,))
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": 5001, "type": "private"},
+                        "from": {"id": 101},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+
+            tasks = store.list_unfinished_tasks()
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0].user_id, 101)
+            self.assertEqual(tasks[0].source_url, "https://video.example/watch")
+            self.assertEqual(telegram.messages, [(5001, "Queued: https://video.example/watch")])
+
+    async def test_handle_update_private_mode_ignores_unauthorized_private_user(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path, telegram_allowed_user_ids=(101,))
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": 5001, "type": "private"},
+                        "from": {"id": 999},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+
+            self.assertEqual(store.list_unfinished_tasks(), [])
+            self.assertEqual(telegram.messages, [])
+
+    async def test_handle_update_private_mode_ignores_authorized_user_in_group_chat(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path, telegram_allowed_user_ids=(101,))
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": -2001, "type": "group"},
+                        "from": {"id": 101},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+
+            self.assertEqual(store.list_unfinished_tasks(), [])
+            self.assertEqual(telegram.messages, [])
+
+    async def test_handle_update_private_mode_dedupes_same_user_same_url(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path, telegram_allowed_user_ids=(101,))
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+            update = {
+                "message": {
+                    "message_id": 1,
+                    "chat": {"id": 5001, "type": "private"},
+                    "from": {"id": 101},
+                    "text": "download https://video.example/watch",
+                }
+            }
+
+            await service.handle_update(update)
+            await service.handle_update(update)
+
+            tasks = store.list_unfinished_tasks()
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0].user_id, 101)
+            self.assertEqual(
+                telegram.messages,
+                [
+                    (5001, "Queued: https://video.example/watch"),
+                    (5001, "Already queued: https://video.example/watch"),
+                ],
+            )
+
+    async def test_handle_update_private_mode_allows_same_url_for_different_users(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(db_path, telegram_allowed_user_ids=(101, 202))
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": 5001, "type": "private"},
+                        "from": {"id": 101},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 2,
+                        "chat": {"id": 5002, "type": "private"},
+                        "from": {"id": 202},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+
+            tasks = store.list_unfinished_tasks()
+            self.assertEqual(len(tasks), 2)
+            self.assertEqual(tasks[0].user_id, 101)
+            self.assertEqual(tasks[1].user_id, 202)
+            self.assertEqual(
+                telegram.messages,
+                [
+                    (5001, "Queued: https://video.example/watch"),
+                    (5002, "Queued: https://video.example/watch"),
+                ],
+            )
+
+    async def test_handle_update_legacy_mode_uses_chat_gate_when_user_list_empty(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.sqlite3"
+            config = self.make_config(
+                db_path,
+                telegram_allowed_chat_id=42,
+                telegram_allowed_user_ids=(),
+            )
+            store = TaskStore(db_path)
+            telegram = FakeTelegramApi()
+            service = BotService(config=config, store=store, telegram_api=telegram)
+
+            await service.handle_update(
+                {
+                    "message": {
+                        "message_id": 1,
+                        "chat": {"id": 42, "type": "group"},
+                        "from": {"id": 999},
+                        "text": "download https://video.example/watch",
+                    }
+                }
+            )
+
+            tasks = store.list_unfinished_tasks()
+            self.assertEqual(len(tasks), 1)
+            self.assertIsNone(tasks[0].user_id)
+            self.assertEqual(telegram.messages, [(42, "Queued: https://video.example/watch")])
 
     async def test_poll_once_sends_finished_download_link(self):
         with TemporaryDirectory() as tmp:

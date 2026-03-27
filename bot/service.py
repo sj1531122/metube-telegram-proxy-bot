@@ -9,6 +9,7 @@ from bot.models import STATE_FAILED, STATE_FINISHED, STATE_TIMEOUT, BotTask
 from bot.url_utils import extract_urls, normalize_source_url
 
 logger = logging.getLogger(__name__)
+_REJECTED = object()
 
 
 class BotService:
@@ -21,8 +22,10 @@ class BotService:
 
     async def handle_update(self, update: dict) -> None:
         message = update.get("message") or {}
-        chat_id = (message.get("chat") or {}).get("id")
-        if chat_id != self.config.telegram_allowed_chat_id:
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        user_id = self._admitted_user_id(message)
+        if user_id is _REJECTED:
             return
 
         text = message.get("text") or ""
@@ -34,6 +37,7 @@ class BotService:
         for url in urls:
             source_url = normalize_source_url(url)
             duplicate = self.store.find_recent_duplicate(
+                user_id=user_id,
                 source_url=source_url,
                 within_seconds=self.config.dedupe_window_seconds,
             )
@@ -45,8 +49,27 @@ class BotService:
                 chat_id=chat_id,
                 telegram_message_id=message_id,
                 source_url=source_url,
+                user_id=user_id,
             )
             await self._send_message(chat_id, f"Queued: {source_url}")
+
+    def _multi_user_mode(self) -> bool:
+        return bool(self.config.telegram_allowed_user_ids)
+
+    def _admitted_user_id(self, message: dict) -> int | None | object:
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if self._multi_user_mode():
+            if chat.get("type") != "private":
+                return _REJECTED
+            user_id = (message.get("from") or {}).get("id")
+            if user_id not in self.config.telegram_allowed_user_ids:
+                return _REJECTED
+            return user_id
+
+        if chat_id != self.config.telegram_allowed_chat_id:
+            return _REJECTED
+        return None
 
     async def poll_once(self) -> None:
         self._mark_timed_out_tasks()
