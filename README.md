@@ -115,12 +115,15 @@ The default compose file mounts both directories from the host, so downloads and
 Required:
 
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_IDS`
 - `PUBLIC_DOWNLOAD_BASE_URL`
+
+Allowlist configuration (at least one required):
+
+- `TELEGRAM_ALLOWED_USER_IDS` (preferred multi-user private-chat allowlist; when set, only those user IDs may queue downloads via private chat and group chats are ignored)
+- `TELEGRAM_ALLOWED_CHAT_ID` (legacy single-chat compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset)
 
 Optional:
 
-- `TELEGRAM_ALLOWED_CHAT_ID` (legacy compatibility; honored only when `TELEGRAM_ALLOWED_USER_IDS` is unset)
 - `VPN_SUBSCRIPTION_URL`
 - `DOWNLOAD_DIR`
 - `STATE_DIR`
@@ -285,7 +288,7 @@ PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 
 Task behavior:
 
-- only the configured chat ID can queue tasks
+- only private chats from the user IDs listed in `TELEGRAM_ALLOWED_USER_IDS` can queue tasks; group chats are ignored, and when that list is unset the legacy `TELEGRAM_ALLOWED_CHAT_ID` single-chat fallback is used
 - each incoming message may contain one or more URLs
 - URLs are normalized before de-duplication and storage
 - only one queued task is processed at a time
@@ -365,7 +368,7 @@ curl -I http://127.0.0.1:8081/download/notfound
 
 Telegram verification:
 
-1. Send a normal media URL from the allowed chat.
+1. Send a normal media URL from one of the allowed private-user chats (or the legacy allowed chat when only `TELEGRAM_ALLOWED_CHAT_ID` is configured).
 2. Confirm you receive `Queued: ...`.
 3. Wait for `Finished: ...` and open the returned link.
 4. Confirm playlist URLs still behave as single-video requests only.
