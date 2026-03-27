@@ -21,6 +21,7 @@ class BotTask:
     source_url: str
     state: str
     submitted_at: float
+    user_id: int | None = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     download_url: Optional[str] = None

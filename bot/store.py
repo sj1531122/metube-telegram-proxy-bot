@@ -45,6 +45,7 @@ class TaskStore:
                 CREATE TABLE IF NOT EXISTS tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
+                    user_id INTEGER,
                     telegram_message_id INTEGER NOT NULL,
                     source_url TEXT NOT NULL,
                     submitted_at REAL NOT NULL,
@@ -72,6 +73,7 @@ class TaskStore:
                 for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
             }
             migrations = {
+                "user_id": "ALTER TABLE tasks ADD COLUMN user_id INTEGER",
                 "retry_count": "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
                 "max_retries": "ALTER TABLE tasks ADD COLUMN max_retries INTEGER",
                 "next_retry_at": "ALTER TABLE tasks ADD COLUMN next_retry_at REAL",
@@ -91,20 +93,27 @@ class TaskStore:
                         if "duplicate column name" not in str(exc).lower():
                             raise
 
-    def create_task(self, chat_id: int, telegram_message_id: int, source_url: str) -> int:
+    def create_task(
+        self,
+        chat_id: int,
+        telegram_message_id: int,
+        source_url: str,
+        user_id: int | None = None,
+    ) -> int:
         submitted_at = time.time()
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO tasks (
                     chat_id,
+                    user_id,
                     telegram_message_id,
                     source_url,
                     submitted_at,
                     state
-                ) VALUES (?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, telegram_message_id, source_url, submitted_at, STATE_QUEUED),
+                (chat_id, user_id, telegram_message_id, source_url, submitted_at, STATE_QUEUED),
             )
             return int(cursor.lastrowid)
 
@@ -118,18 +127,29 @@ class TaskStore:
             raise KeyError(task_id)
         return self._row_to_task(row)
 
-    def find_recent_duplicate(self, source_url: str, within_seconds: int) -> BotTask | None:
+    def find_recent_duplicate(
+        self,
+        user_id: int | None,
+        source_url: str,
+        within_seconds: int,
+    ) -> BotTask | None:
         cutoff = time.time() - within_seconds
+        where_user = "user_id = ?"
+        params: tuple[object, ...] = (user_id, source_url, cutoff)
+        if user_id is None:
+            where_user = "user_id IS NULL"
+            params = (source_url, cutoff)
         with self._connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT * FROM tasks
-                WHERE source_url = ?
+                WHERE {where_user}
+                  AND source_url = ?
                   AND submitted_at >= ?
                 ORDER BY submitted_at DESC
                 LIMIT 1
                 """,
-                (source_url, cutoff),
+                params,
             ).fetchone()
         return None if row is None else self._row_to_task(row)
 
@@ -277,6 +297,7 @@ class TaskStore:
             source_url=row["source_url"],
             state=row["state"],
             submitted_at=row["submitted_at"],
+            user_id=row["user_id"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
             download_url=row["download_url"],

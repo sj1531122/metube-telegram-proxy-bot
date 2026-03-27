@@ -24,6 +24,7 @@ class TaskStoreTests(TestCase):
 
             task_id = store.create_task(
                 chat_id=1,
+                user_id=101,
                 telegram_message_id=10,
                 source_url="https://a.example",
             )
@@ -33,27 +34,36 @@ class TaskStoreTests(TestCase):
 
             self.assertEqual(task.id, task_id)
             self.assertEqual(task.chat_id, 1)
+            self.assertEqual(task.user_id, 101)
             self.assertEqual(task.telegram_message_id, 10)
             self.assertEqual(task.source_url, "https://a.example")
             self.assertEqual(task.state, STATE_QUEUED)
 
-    def test_find_recent_duplicate_returns_matching_task(self):
+    def test_find_recent_duplicate_matches_user_and_source_url(self):
         with TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.sqlite3"
             store = TaskStore(db_path)
             task_id = store.create_task(
                 chat_id=1,
+                user_id=101,
                 telegram_message_id=10,
                 source_url="https://a.example",
             )
 
             duplicate = store.find_recent_duplicate(
+                user_id=101,
+                source_url="https://a.example",
+                within_seconds=300,
+            )
+            other_user_duplicate = store.find_recent_duplicate(
+                user_id=202,
                 source_url="https://a.example",
                 within_seconds=300,
             )
 
             self.assertIsNotNone(duplicate)
             self.assertEqual(duplicate.id, task_id)
+            self.assertIsNone(other_user_duplicate)
 
     def test_retry_metadata_fields_roundtrip(self):
         with TemporaryDirectory() as tmp:
@@ -154,8 +164,16 @@ class TaskStoreTests(TestCase):
                 )
 
             store = TaskStore(db_path)
+            with sqlite3.connect(db_path) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+                }
+
+            self.assertIn("user_id", columns)
             task = store.get_task(1)
             self.assertEqual(task.source_url, "https://a.example")
+            self.assertIsNone(task.user_id)
             self.assertEqual(task.retry_count, 0)
             self.assertIsNone(task.max_retries)
             self.assertIsNone(task.next_retry_at)
@@ -215,7 +233,7 @@ class TaskStoreTests(TestCase):
 
         store._init_db()
 
-        self.assertEqual(len(fake_connection.alter_calls), 10)
+        self.assertEqual(len(fake_connection.alter_calls), 11)
 
     def test_list_unfinished_tasks_includes_retrying(self):
         with TemporaryDirectory() as tmp:
