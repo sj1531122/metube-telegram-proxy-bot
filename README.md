@@ -14,6 +14,7 @@ Current `main` is designed for one practical deployment target:
 - one allowed chat
 - one serial download worker
 - one public download path: `/download/*`
+- single-video downloads only
 
 Verified production flow:
 
@@ -35,7 +36,11 @@ If proxy runtime is enabled, the worker can automatically switch proxy nodes and
 - one serial worker, no concurrent downloads
 - embedded HTTP file server on container port `8081`
 - one public file path only: `/download/*`
+- explicit `--no-playlist` execution for every `yt-dlp` run
 - optional `VPN_SUBSCRIPTION_URL` support
+- bundled `Deno` runtime in the Docker image for modern YouTube extraction
+- optional mounted cookies support through `COOKIES_FILE`
+- optional `yt-dlp` passthrough flags through `YTDLP_EXTRA_ARGS`
 - Xray node parsing from dynamic subscription content
 - automatic proxy failover and retry
 - proxy state persistence across container restart
@@ -47,6 +52,7 @@ If proxy runtime is enabled, the worker can automatically switch proxy nodes and
 - separate audio download URL path
 - webhook mode
 - multi-user or multi-chat isolation
+- playlist downloads
 
 ## Architecture
 
@@ -91,6 +97,8 @@ Optional:
 - `VPN_SUBSCRIPTION_URL`
 - `DOWNLOAD_DIR`
 - `STATE_DIR`
+- `COOKIES_FILE`
+- `YTDLP_EXTRA_ARGS`
 - `HTTP_BIND`
 - `HTTP_PORT`
 - `HTTP_TIMEOUT_SECONDS`
@@ -109,10 +117,32 @@ Variable notes:
   - example: `https://downloads.example.com/download`
 - `VPN_SUBSCRIPTION_URL`
   - if omitted, downloads run without proxy failover
+- `COOKIES_FILE`
+  - optional absolute in-container path to a mounted Netscape `cookies.txt` file
+  - startup fails fast if the path is set but the file does not exist
+- `YTDLP_EXTRA_ARGS`
+  - optional shell-split passthrough flags appended before the final source URL
+  - examples: `--format bv*+ba/b`, `--referer https://example.com`, `--extractor-args youtube:player_client=web`
 - `BOT_DEDUPE_WINDOW_SECONDS`
   - suppresses repeated submission of the same normalized URL within the configured window
 - `TASK_TIMEOUT_SECONDS`
   - hard timeout for a single `yt-dlp` execution
+
+## Runtime Parity Modes
+
+Three practical operating modes are supported:
+
+1. Baseline
+   - set the required Telegram variables and `PUBLIC_DOWNLOAD_BASE_URL`
+   - no proxy, no cookies, no extra `yt-dlp` flags
+2. YouTube-fix minimum
+   - rebuild the image so the bundled `Deno` runtime is present
+   - this is the minimum change for the reported `No supported JavaScript runtime could be found` YouTube failure
+3. Parity
+   - optionally mount a `cookies.txt` file and set `COOKIES_FILE`
+   - optionally set `YTDLP_EXTRA_ARGS` for manual tuning that matches a working local `yt-dlp` command
+
+Regardless of mode, the worker always adds `--no-playlist`. Playlist URLs are treated as single-video requests only.
 
 ## Docker Compose Quick Start
 
@@ -138,13 +168,29 @@ PUBLIC_DOWNLOAD_BASE_URL=https://downloads.example.com/download
 VPN_SUBSCRIPTION_URL=https://example.com/subscription
 ```
 
-4. Start the container.
+4. Optional: enable cookies support by mounting a Netscape `cookies.txt` file.
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./data/downloads:/downloads
+      - ./data/state:/state
+      - ./secrets/cookies.txt:/run/secrets/cookies.txt:ro
+```
+
+```env
+COOKIES_FILE=/run/secrets/cookies.txt
+YTDLP_EXTRA_ARGS=--format bv*+ba/b
+```
+
+5. Start or rebuild the container.
 
 ```bash
 docker compose up -d --build
 ```
 
-5. Check status and logs.
+6. Check status and logs.
 
 ```bash
 docker compose ps
@@ -157,6 +203,8 @@ Default compose behavior:
 - listens on host port `8081`
 - downloads stored in `./data/downloads`
 - state stored in `./data/state`
+
+If you only need the YouTube JavaScript runtime fix, you can leave `COOKIES_FILE` and `YTDLP_EXTRA_ARGS` unset and just rebuild the image.
 
 ## Nginx Reverse Proxy
 
@@ -204,6 +252,7 @@ Task behavior:
 - each incoming message may contain one or more URLs
 - URLs are normalized before de-duplication and storage
 - only one queued task is processed at a time
+- every download command forces `--no-playlist`
 
 Success behavior:
 
@@ -253,6 +302,7 @@ python -m bot.main
 ```
 
 This mode still expects `yt-dlp`, `ffmpeg`, and optional `xray` to be available on the machine.
+For YouTube parity outside Docker, install `Deno >= 2` on the host as well.
 
 ## Verification
 
@@ -281,7 +331,9 @@ Telegram verification:
 1. Send a normal media URL from the allowed chat.
 2. Confirm you receive `Queued: ...`.
 3. Wait for `Finished: ...` and open the returned link.
-4. If proxy runtime is enabled, test a URL that previously triggered rate-limit behavior and confirm automatic retry/failover is visible in logs.
+4. Confirm playlist URLs still behave as single-video requests only.
+5. If proxy runtime is enabled, test a URL that previously triggered rate-limit behavior and confirm automatic retry/failover is visible in logs.
+6. For the YouTube runtime-fix path, verify the previous JavaScript-runtime error no longer appears after rebuilding the image.
 
 ## Operations
 
