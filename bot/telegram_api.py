@@ -27,6 +27,7 @@ class TelegramApi:
         if offset is not None:
             params["offset"] = offset
         endpoint = f"{self.base_url}/getUpdates"
+        request_timeout_seconds = max(self.timeout_seconds, timeout + 5)
         try:
             if self._get_json is not None:
                 response = self._get_json(endpoint, params)
@@ -35,7 +36,7 @@ class TelegramApi:
                     self._default_get_json,
                     endpoint,
                     params,
-                    self.timeout_seconds,
+                    request_timeout_seconds,
                 )
         except TelegramApiError:
             raise

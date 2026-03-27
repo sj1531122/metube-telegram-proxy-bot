@@ -38,6 +38,13 @@ class ErrorClassificationTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "switch_node")
 
+    def test_classify_partial_read_download_error_as_switch_node(self) -> None:
+        decision = classify_download_error(
+            "ERROR: [download] Got error: 1776819 bytes read, 8337267 more expected. Giving up after 10 retries"
+        )
+
+        self.assertEqual(decision.action, "switch_node")
+
     def test_classify_private_video_as_final_fail(self) -> None:
         decision = classify_download_error("Private video. Sign in if you've been granted access.")
 

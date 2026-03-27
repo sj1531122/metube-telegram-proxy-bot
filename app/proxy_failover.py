@@ -13,6 +13,7 @@ SWITCH_PATTERNS = (
     "connection refused",
     "network is unreachable",
     "connection reset by peer",
+    "more expected",
     "proxy error",
     "socks",
     "tls handshake",

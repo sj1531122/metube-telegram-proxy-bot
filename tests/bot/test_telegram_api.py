@@ -76,6 +76,29 @@ class TelegramApiTests(IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(TelegramApiError, "offline"):
                 await api.get_updates(offset=55)
 
+    async def test_get_updates_uses_request_timeout_above_long_poll_timeout(self):
+        calls = []
+
+        def fake_default_get(url, params, timeout_seconds):
+            calls.append((url, params, timeout_seconds))
+            return {"ok": True, "result": []}
+
+        api = TelegramApi(bot_token="token", timeout_seconds=30)
+
+        with patch.object(TelegramApi, "_default_get_json", side_effect=fake_default_get):
+            await api.get_updates(offset=55, timeout=30)
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "https://api.telegram.org/bottoken/getUpdates",
+                    {"offset": 55, "timeout": 30},
+                    35,
+                )
+            ],
+        )
+
     async def test_send_message_wraps_json_decode_error(self):
         api = TelegramApi(bot_token="token", timeout_seconds=7)
 

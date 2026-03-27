@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 
-ARG DENO_VERSION=2.0.0
+ARG DENO_VERSION=2.6.6
 
 WORKDIR /app
 
