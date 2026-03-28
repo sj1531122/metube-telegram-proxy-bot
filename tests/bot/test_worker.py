@@ -212,6 +212,90 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
             self.assertEqual(runtime.failed_calls, [("node-a", "http error 429", 100.0)])
             self.assertEqual(runtime.switch_calls, ["http error 429"])
 
+    async def test_run_one_task_switches_node_for_tiktok_blocked_ip(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            store = TaskStore(root / "tasks.sqlite3")
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://www.tiktok.com/@user/video/1234567890",
+            )
+            runtime = FakeProxyRuntime(fingerprints=["node-a", "node-b"])
+            runner = FakeDownloadRunner(
+                [
+                    DownloadResult(
+                        ok=False,
+                        title=None,
+                        filename=None,
+                        error_text="Your IP address is blocked from accessing this post",
+                    )
+                ]
+            )
+            worker = DownloadWorker(
+                config=config,
+                store=store,
+                download_runner=runner,
+                proxy_runtime=runtime,
+                time_fn=lambda: 100.0,
+            )
+
+            await worker.run_one_task()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_RETRYING)
+            self.assertEqual(task.failover_attempts, 1)
+            self.assertEqual(task.next_retry_at, 100.0)
+            self.assertEqual(task.attempted_node_fingerprints, ["node-a"])
+            self.assertEqual(
+                runtime.failed_calls,
+                [("node-a", "your ip address is blocked from accessing this post", 100.0)],
+            )
+            self.assertEqual(runtime.switch_calls, ["your ip address is blocked from accessing this post"])
+
+    async def test_run_one_task_switches_node_for_tiktok_403(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            store = TaskStore(root / "tasks.sqlite3")
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://vt.tiktok.com/ZSH1xW1Ga",
+            )
+            runtime = FakeProxyRuntime(fingerprints=["node-a", "node-b"])
+            runner = FakeDownloadRunner(
+                [
+                    DownloadResult(
+                        ok=False,
+                        title=None,
+                        filename=None,
+                        error_text=(
+                            "ERROR: [TikTok] 7603427099658980622: Unable to download webpage: "
+                            "HTTP Error 403: Forbidden"
+                        ),
+                    )
+                ]
+            )
+            worker = DownloadWorker(
+                config=config,
+                store=store,
+                download_runner=runner,
+                proxy_runtime=runtime,
+                time_fn=lambda: 100.0,
+            )
+
+            await worker.run_one_task()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_RETRYING)
+            self.assertEqual(task.failover_attempts, 1)
+            self.assertEqual(task.next_retry_at, 100.0)
+            self.assertEqual(task.attempted_node_fingerprints, ["node-a"])
+            self.assertEqual(runtime.failed_calls, [("node-a", "tiktok http error 403", 100.0)])
+            self.assertEqual(runtime.switch_calls, ["tiktok http error 403"])
+
     async def test_run_one_task_stops_after_three_distinct_nodes(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

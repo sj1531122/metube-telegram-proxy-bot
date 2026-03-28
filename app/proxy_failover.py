@@ -26,6 +26,13 @@ SWITCH_PATTERNS = (
     "request has been blocked",
 )
 
+PROXY_ONLY_SWITCH_PATTERNS = (
+    "your ip address is blocked from accessing this post",
+    "could not connect to server",
+    "failed to connect to",
+    "connection timed out after",
+)
+
 RETRY_SAME_NODE_PATTERNS = (
     "timed out",
     "temporary failure",
@@ -44,12 +51,19 @@ FINAL_FAIL_PATTERNS = (
 )
 
 
-def classify_download_error(error_text: str) -> FailoverDecision:
+def classify_download_error(error_text: str, *, proxy_enabled: bool = False) -> FailoverDecision:
     normalized = (error_text or "").lower()
 
     for pattern in FINAL_FAIL_PATTERNS:
         if pattern in normalized:
             return FailoverDecision("final_fail", pattern)
+
+    if proxy_enabled:
+        if "[tiktok]" in normalized and "http error 403" in normalized:
+            return FailoverDecision("switch_node", "tiktok http error 403")
+        for pattern in PROXY_ONLY_SWITCH_PATTERNS:
+            if pattern in normalized:
+                return FailoverDecision("switch_node", pattern)
 
     for pattern in RETRY_SAME_NODE_PATTERNS:
         if pattern in normalized:
@@ -68,7 +82,7 @@ class ProxyFailoverCoordinator:
         self._lock = asyncio.Lock()
 
     async def handle_retryable_failure(self, *, task, error_text: str) -> str:
-        decision = classify_download_error(error_text)
+        decision = classify_download_error(error_text, proxy_enabled=True)
         if decision.action != "switch_node":
             return decision.action
 

@@ -101,7 +101,10 @@ class DownloadWorker:
             )
             return True
 
-        decision = classify_download_error(error_text)
+        decision = classify_download_error(
+            error_text,
+            proxy_enabled=self.proxy_runtime is not None,
+        )
         if decision.action == "retry_same_node":
             self._retry_same_node(
                 task_id=task.id,

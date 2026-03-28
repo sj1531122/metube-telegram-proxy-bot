@@ -28,6 +28,30 @@ class ErrorClassificationTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "retry_same_node")
 
+    def test_classify_tiktok_blocked_ip_as_switch_node_when_proxy_enabled(self) -> None:
+        decision = classify_download_error(
+            "Your IP address is blocked from accessing this post",
+            proxy_enabled=True,
+        )
+
+        self.assertEqual(decision.action, "switch_node")
+
+    def test_classify_connect_timeout_as_switch_node_when_proxy_enabled(self) -> None:
+        decision = classify_download_error(
+            "Failed to connect to www.tiktok.com port 443 after 21009 ms: Could not connect to server",
+            proxy_enabled=True,
+        )
+
+        self.assertEqual(decision.action, "switch_node")
+
+    def test_classify_tiktok_403_as_switch_node_when_proxy_enabled(self) -> None:
+        decision = classify_download_error(
+            "ERROR: [TikTok] 7603427099658980622: Unable to download webpage: HTTP Error 403: Forbidden",
+            proxy_enabled=True,
+        )
+
+        self.assertEqual(decision.action, "switch_node")
+
     def test_classify_proxy_connectivity_error_as_switch_node(self) -> None:
         decision = classify_download_error("connection reset by peer while connecting through proxy")
 
