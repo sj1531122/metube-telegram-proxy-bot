@@ -52,6 +52,15 @@ class ErrorClassificationTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "switch_node")
 
+    def test_classify_tiktok_short_link_about_redirect_as_switch_node_when_proxy_enabled(self) -> None:
+        decision = classify_download_error(
+            "WARNING: [generic] Falling back on generic information extractor\n"
+            "ERROR: Unsupported URL: https://www.tiktok.com/hk/about",
+            proxy_enabled=True,
+        )
+
+        self.assertEqual(decision.action, "switch_node")
+
     def test_classify_proxy_connectivity_error_as_switch_node(self) -> None:
         decision = classify_download_error("connection reset by peer while connecting through proxy")
 

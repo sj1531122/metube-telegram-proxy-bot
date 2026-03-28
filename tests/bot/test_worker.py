@@ -296,6 +296,48 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
             self.assertEqual(runtime.failed_calls, [("node-a", "tiktok http error 403", 100.0)])
             self.assertEqual(runtime.switch_calls, ["tiktok http error 403"])
 
+    async def test_run_one_task_switches_node_for_tiktok_about_redirect(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            store = TaskStore(root / "tasks.sqlite3")
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://vt.tiktok.com/ZSH1Qjf99",
+            )
+            runtime = FakeProxyRuntime(fingerprints=["node-a", "node-b"])
+            runner = FakeDownloadRunner(
+                [
+                    DownloadResult(
+                        ok=False,
+                        title=None,
+                        filename=None,
+                        error_text=(
+                            "WARNING: [generic] Falling back on generic information extractor\n"
+                            "ERROR: Unsupported URL: https://www.tiktok.com/hk/about"
+                        ),
+                    )
+                ]
+            )
+            worker = DownloadWorker(
+                config=config,
+                store=store,
+                download_runner=runner,
+                proxy_runtime=runtime,
+                time_fn=lambda: 100.0,
+            )
+
+            await worker.run_one_task()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_RETRYING)
+            self.assertEqual(task.failover_attempts, 1)
+            self.assertEqual(task.next_retry_at, 100.0)
+            self.assertEqual(task.attempted_node_fingerprints, ["node-a"])
+            self.assertEqual(runtime.failed_calls, [("node-a", "tiktok about redirect", 100.0)])
+            self.assertEqual(runtime.switch_calls, ["tiktok about redirect"])
+
     async def test_run_one_task_stops_after_three_distinct_nodes(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
