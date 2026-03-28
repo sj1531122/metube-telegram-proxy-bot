@@ -4,12 +4,11 @@ import asyncio
 import time
 from urllib.parse import quote
 
-from app.proxy_failover import classify_download_error
+from app.proxy_failover import MAX_DISTINCT_NODE_ATTEMPTS, classify_download_error
 from bot.download_executor import run_download
 from bot.models import STATE_FAILED, STATE_FINISHED, STATE_RETRYING, STATE_TIMEOUT
 
 SAME_NODE_RETRY_DELAYS = (10.0, 30.0, 60.0)
-MAX_DISTINCT_NODE_ATTEMPTS = 3
 LOCAL_PROXY_URL = "http://127.0.0.1:10809"
 
 

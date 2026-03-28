@@ -16,6 +16,11 @@ import yt_dlp.networking.impersonate
 from dl_formats import get_format, get_opts, AUDIO_FORMATS
 from datetime import datetime
 
+try:
+    from app.proxy_failover import MAX_DISTINCT_NODE_ATTEMPTS
+except ModuleNotFoundError:
+    from proxy_failover import MAX_DISTINCT_NODE_ATTEMPTS
+
 log = logging.getLogger('ytdl')
 
 def _convert_generators_to_lists(obj):
@@ -420,7 +425,7 @@ class DownloadQueue:
             return 'final_fail'
 
         self._initialize_failover_tracking(download.info)
-        if download.info.failover_attempts >= 3:
+        if download.info.failover_attempts >= MAX_DISTINCT_NODE_ATTEMPTS:
             return 'final_fail'
 
         error_text = download.info.msg or download.info.error or 'download failed'

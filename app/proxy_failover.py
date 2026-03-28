@@ -9,6 +9,8 @@ class FailoverDecision(NamedTuple):
     reason: str
 
 
+MAX_DISTINCT_NODE_ATTEMPTS = 20
+
 SWITCH_PATTERNS = (
     "connection refused",
     "network is unreachable",

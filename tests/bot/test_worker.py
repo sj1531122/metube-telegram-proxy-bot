@@ -338,7 +338,52 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
             self.assertEqual(runtime.failed_calls, [("node-a", "tiktok about redirect", 100.0)])
             self.assertEqual(runtime.switch_calls, ["tiktok about redirect"])
 
-    async def test_run_one_task_stops_after_three_distinct_nodes(self):
+    async def test_run_one_task_retries_until_twenty_distinct_nodes(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self.make_config(root)
+            store = TaskStore(root / "tasks.sqlite3")
+            task_id = store.create_task(
+                chat_id=1,
+                telegram_message_id=10,
+                source_url="https://video.example/watch",
+            )
+            attempted = [f"node-{index}" for index in range(19)]
+            store.update_task_state(
+                task_id,
+                STATE_RETRYING,
+                failover_attempts=18,
+                attempted_node_fingerprints=attempted,
+            )
+            runtime = FakeProxyRuntime(generation=19, fingerprints=["node-18", "node-19"])
+            runner = FakeDownloadRunner(
+                [
+                    DownloadResult(
+                        ok=False,
+                        title=None,
+                        filename=None,
+                        error_text="HTTP Error 429: Too Many Requests",
+                    )
+                ]
+            )
+            worker = DownloadWorker(
+                config=config,
+                store=store,
+                download_runner=runner,
+                proxy_runtime=runtime,
+                time_fn=lambda: 100.0,
+            )
+
+            await worker.run_one_task()
+
+            task = store.get_task(task_id)
+            self.assertEqual(task.state, STATE_RETRYING)
+            self.assertEqual(task.failover_attempts, 19)
+            self.assertEqual(task.attempted_node_fingerprints, attempted)
+            self.assertEqual(runtime.failed_calls, [("node-18", "http error 429", 100.0)])
+            self.assertEqual(runtime.switch_calls, ["http error 429"])
+
+    async def test_run_one_task_stops_after_twenty_distinct_nodes(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = self.make_config(root)
@@ -351,10 +396,10 @@ class DownloadWorkerTests(IsolatedAsyncioTestCase):
             store.update_task_state(
                 task_id,
                 STATE_RETRYING,
-                failover_attempts=2,
-                attempted_node_fingerprints=["node-a", "node-b", "node-c"],
+                failover_attempts=19,
+                attempted_node_fingerprints=[f"node-{index}" for index in range(20)],
             )
-            runtime = FakeProxyRuntime(generation=3, fingerprints=["node-c", "node-d"])
+            runtime = FakeProxyRuntime(generation=20, fingerprints=["node-19", "node-20"])
             runner = FakeDownloadRunner(
                 [
                     DownloadResult(

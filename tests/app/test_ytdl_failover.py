@@ -139,16 +139,35 @@ class DownloadQueueFailoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "final_fail")
             self.assertFalse(queue.queue.exists(info.url))
 
-    async def test_handle_failed_download_stops_after_three_distinct_nodes(self) -> None:
+    async def test_handle_failed_download_retries_until_twenty_distinct_nodes(self) -> None:
         with TemporaryDirectory() as tmp:
             config = self.make_config(Path(tmp))
-            runtime = FakeProxyRuntime(generation=5, fingerprint="node-d")
+            runtime = FakeProxyRuntime(generation=21, fingerprint="node-t")
             failover = FakeProxyFailover(result="retry_current_generation")
             queue = DownloadQueue(config, FakeNotifier(), proxy_runtime=runtime, proxy_failover=failover)
             info = self.make_info()
-            info.proxy_generation_started = 5
-            info.failover_attempts = 3
-            info.attempted_node_fingerprints = ["node-a", "node-b", "node-c"]
+            info.proxy_generation_started = 21
+            info.failover_attempts = 19
+            info.attempted_node_fingerprints = [f"node-{index}" for index in range(19)]
+            download = FakeDownload(info)
+
+            result = await queue._handle_failed_download(download)
+
+            self.assertEqual(result, "requeued")
+            self.assertEqual(info.failover_attempts, 20)
+            self.assertEqual(info.attempted_node_fingerprints, [*(f"node-{index}" for index in range(19)), "node-t"])
+            self.assertTrue(queue.queue.exists(info.url))
+
+    async def test_handle_failed_download_stops_after_twenty_distinct_nodes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config = self.make_config(Path(tmp))
+            runtime = FakeProxyRuntime(generation=22, fingerprint="node-u")
+            failover = FakeProxyFailover(result="retry_current_generation")
+            queue = DownloadQueue(config, FakeNotifier(), proxy_runtime=runtime, proxy_failover=failover)
+            info = self.make_info()
+            info.proxy_generation_started = 22
+            info.failover_attempts = 20
+            info.attempted_node_fingerprints = [f"node-{index}" for index in range(20)]
             download = FakeDownload(info)
 
             result = await queue._handle_failed_download(download)
